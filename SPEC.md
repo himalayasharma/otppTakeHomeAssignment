@@ -14,7 +14,7 @@ Secondary: Directional accuracy of T+1 return sign.
 - If not hit: ship with honest limitations slide.
 
 ## Data
-- Prices: yfinance NVDA 2020-04-19 to 2025-04-18
+- Prices: yfinance NVDA 2021-04-19 to 2026-04-18
 - Earnings calls: 6 quarters, manually collected to data/raw/transcripts/
 - News: NewsAPI free tier (last 30 days full), FMP for longer headline history
 - 10-K / 10-Q: EDGAR

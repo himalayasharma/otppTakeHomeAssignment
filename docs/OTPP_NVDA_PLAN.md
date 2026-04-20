@@ -58,7 +58,7 @@ Rule: **if you find yourself hand-writing code for more than 15 min, stop.** Eit
 ## 2. Project Scope (what you're actually building)
 
 ### Data
-- **Prices/volume:** yfinance, NVDA daily OHLCV, 2020-04-19 → 2025-04-18 (5 yrs)
+- **Prices/volume:** yfinance, NVDA daily OHLCV, 2021-04-19 → 2026-04-18 (5 yrs)
 - **Earnings call transcripts:** 6 most recent quarters from Motley Fool / Seeking Alpha / IR page (manual scrape, ~6 text files)
 - **SEC filings:** latest 10-K + last 2 10-Qs from EDGAR (free)
 - **News headlines:** NewsAPI free tier (last 30 days detailed) + Finnhub/FMP free tier for older headlines
@@ -231,7 +231,7 @@ Paste this prompt (non-plan mode, just let it rip — this is research mode):
 
 > I'm doing a take-home for OTPP. Build me an EDA notebook at `notebooks/01_eda.ipynb` that:
 >
-> 1. Pulls NVDA daily OHLCV from yfinance from 2020-04-19 to 2025-04-18
+> 1. Pulls NVDA daily OHLCV from yfinance from 2021-04-19 to 2026-04-18
 > 2. Computes daily returns, 5-day realized volatility (sqrt of sum of squared returns over 5 days), log volume
 > 3. Plots: price over time with earnings call dates marked, return distribution, rolling 21-day vol, autocorrelation of returns and of vol
 > 4. Prints: n rows, date range, any missing days, return summary stats, vol summary stats
@@ -261,7 +261,7 @@ Secondary: Directional accuracy of T+1 return sign.
 - If not hit: ship with honest limitations slide.
 
 ## Data
-- Prices: yfinance NVDA 2020-04-19 to 2025-04-18
+- Prices: yfinance NVDA 2021-04-19 to 2026-04-18
 - Earnings calls: 6 quarters, manually collected to data/raw/transcripts/
 - News: NewsAPI free tier (last 30 days full), FMP for longer headline history
 - 10-K / 10-Q: EDGAR
