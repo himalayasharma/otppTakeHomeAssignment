@@ -1,0 +1,10 @@
+.venv/
+.env
+data/raw/
+data/processed/
+wandb/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.DS_Store
+notebooks/**/outputs/
