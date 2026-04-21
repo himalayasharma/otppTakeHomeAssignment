@@ -31,19 +31,21 @@
 
 ## 4. Baseline Expectations for a Persistence Vol Model
 
-Target is T+5 RV forecast. The simplest non-trivial model: **rv5[t] = rv5[t−1]**.
+Canonical evaluation target is the SPEC-aligned **walk-forward T+5 RV forecast**, implemented as
+`target_rv5[t] = rv5[t+5]` with persistence prediction `prediction[t] = rv5[t]`.
+That is the baseline contract that should be used for model comparisons and stopping-rule checks.
 
 | Model | MAE | RMSE |
 |---|---|---|
-| Naive persistence (rv5[t-1]) | 0.009623 | 0.017219 |
+| Canonical persistence (walk-forward, predict `rv5[t+5]` with `rv5[t]`) | 0.020326 | — |
 | Mean-only baseline | 0.024185 | — |
-| Persistence skill vs mean | 60.2% lower MAE | — |
+| Legacy EDA diagnostic (`rv5[t]` vs `rv5[t-1]`, in-sample) | 0.009623 | 0.017219 |
 
-**Interpretation:** Persistence already beats mean-only by 60.2% — driven by the very high AC(1)=0.8583. According to the SPEC, a "good model" must beat persistence by ≥5% further MAE reduction (i.e., achieve MAE ≤ 0.009142). That is a **meaningful bar**: the combined effect of all features, architecture choices, and hyperparameter tuning must squeeze out another 5% on top of what a lag-1 copy already achieves. HAR and GARCH variants will likely clear this threshold; whether LLM signals add the incremental 2% above a price-only LightGBM is the key open question.
+**Interpretation:** The repo should treat 0.020326 as the canonical persistence floor because it matches the actual deployment target and walk-forward evaluation contract. The older 0.009623 figure is still useful as an EDA autocorrelation diagnostic, but it is not the benchmark for model selection or for the SPEC stopping rule. Against the canonical baseline, a "good model" must beat persistence by ≥5% further MAE reduction (i.e., achieve MAE ≤ 0.019310). That remains a meaningful bar: the combined effect of all features, architecture choices, and hyperparameter tuning must improve on a persistence forecast that already carries today's trailing realized vol five trading days forward.
 
 ## 5. Open Questions for Modelling
 
-1. **T+5 vs T+1 target:** The SPEC targets T+5 RV. AC(5)=0.3084 is far lower than AC(1)=0.8583. A 5-day-ahead persistence forecast (rv5[t] = rv5[t-5]) will be substantially weaker than a 1-day-ahead one — quantify this MAE degradation to set a realistic baseline for the actual deployment target.
+1. **T+5 walk-forward baseline now pinned:** The canonical persistence benchmark is walk-forward `rv5[t+5]` predicted with `rv5[t]`, with MAE 0.020326 on the frozen dataset. The remaining modeling question is not target definition anymore; it is whether richer price or LLM features can beat that number reliably out of sample.
 2. **Earnings jump treatment:** Each earnings date produces a 2–5 day vol spike clearly visible in the ACF. These are systematic calendar events, not noise. Adding a binary "days-since-last-earnings ≤ 5" feature or a forward-looking "days-to-next-earnings" feature to LightGBM is low-cost, high-prior-probability-of-improvement.
 3. **Rate-hike regime as training contamination:** Regime 2 (62.9% vol) is 1.4× higher vol than the AI boom regime (45.2%). If the walk-forward test set falls primarily in a moderate-vol regime, a model that saw lots of high-vol data in its expanding window may be systematically miscalibrated. Monitor regime composition across each fold.
 4. **Asymmetric vol response:** AC(1) of returns is -0.0362 (negative — mild mean reversion). Does vol respond asymmetrically to positive vs negative returns? GJR-GARCH tests this formally; even without fitting GARCH, binning days by return sign and comparing next-5-day RV distributions gives a quick diagnostic.

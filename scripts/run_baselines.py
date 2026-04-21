@@ -10,6 +10,7 @@ import warnings
 
 import pandas as pd
 import wandb
+from dotenv import load_dotenv
 
 from src.data.loader import load_prices
 from src.features.price_features import make_price_features
@@ -21,7 +22,7 @@ TARGET_COL = "target_rv5"
 TARGET_HORIZON_DAYS = 5
 N_FOLDS = 5
 TEST_FRACTION = 0.165
-PERSISTENCE_REFERENCE_MAE = 0.009623
+PERSISTENCE_REFERENCE_MAE = 0.020326141501115596
 PERSISTENCE_REFERENCE_TOLERANCE = 0.05
 WANDB_PROJECT = "otpp-nvda"
 
@@ -46,6 +47,7 @@ def _git_commit() -> str:
 
 
 def _wandb_mode() -> tuple[str | None, str | None]:
+    load_dotenv()
     configured_mode = os.getenv("WANDB_MODE")
     if configured_mode in {"offline", "disabled"}:
         return configured_mode, None
@@ -206,8 +208,8 @@ def main() -> int:
         run.finish()
 
     print(f"W&B mode: {wandb_mode}")
-    _print_table("Overall metrics", _overall_summary_rows(results))
-    _print_table("Fold metrics", _fold_summary_rows(results))
+    _print_table("Overall metrics (walk-forward T+5 target)", _overall_summary_rows(results))
+    _print_table("Fold metrics (walk-forward T+5 target)", _fold_summary_rows(results))
 
     persistence_mae = float(results["persistence"]["overall"]["mae"])
     guardrail_passed, guardrail_message = _persistence_guardrail(persistence_mae)
