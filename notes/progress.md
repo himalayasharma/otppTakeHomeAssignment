@@ -21,3 +21,11 @@ Next: build the price loader and downstream feature code against the raw parquet
 ## Day 3 (2026-04-21, 0.5h)
 Done: implemented `src/data/loader.py` with Pandera-backed validation plus derived log returns and trailing 5-day realized volatility, and added loader tests against the real parquet contract. Branch: `feat-price-loader`. W&B: N/A.
 Next: implement T2 price feature generation on top of the loader contract, preserving the strict no-lookahead rule in both code and tests. Branch: `feat-price-loader`.
+
+## Day 3 (2026-04-21, 0.4h)
+Done: implemented leak-safe price feature generation (`ret_lag_*`, `vol_lag_*`, `rsi_14`, `vol_zscore_21`) with unit tests for lag alignment, warm-up NaNs, and pure-function behavior. Branch: `feat/price-features`. W&B: N/A.
+Next: implement T3 baseline models on top of the loader and price-feature contracts, keeping fold fits train-only. Branch: `feat/price-features`.
+
+## Day 3 (2026-04-21, 0.4h)
+Done: implemented `src/models/baselines.py` with persistence and HAR-RV baselines, plus tests for exact persistence behavior, synthetic coefficient recovery, and predictions staying unchanged when only future test rows are perturbed. Branch: `feat/t3-baselines`. W&B: N/A.
+Next: implement T4 walk-forward evaluation on top of the baseline predictor contract, with strictly expanding folds and per-fold MAE/QLIKE. Branch: `feat/t3-baselines`.
