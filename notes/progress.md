@@ -17,3 +17,7 @@ Next: build downstream ingestion/feature code on top of the collected transcript
 ## Day 3 (2026-04-21, 0.4h)
 Done: added a repeatable NVDA raw price collector with tests, installed `pyarrow`, and generated `data/raw/nvda_prices.parquet` with normalized daily OHLCV from 2021-04-19 through 2026-04-17. Branch: `master`. W&B: N/A.
 Next: build the price loader and downstream feature code against the raw parquet contract of `date` index plus `open/high/low/close/volume` only. Branch: `master`.
+
+## Day 3 (2026-04-21, 0.5h)
+Done: implemented `src/data/loader.py` with Pandera-backed validation plus derived log returns and trailing 5-day realized volatility, and added loader tests against the real parquet contract. Branch: `feat-price-loader`. W&B: N/A.
+Next: implement T2 price feature generation on top of the loader contract, preserving the strict no-lookahead rule in both code and tests. Branch: `feat-price-loader`.
