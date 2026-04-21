@@ -29,3 +29,7 @@ Next: implement T3 baseline models on top of the loader and price-feature contra
 ## Day 3 (2026-04-21, 0.4h)
 Done: implemented `src/models/baselines.py` with persistence and HAR-RV baselines, plus tests for exact persistence behavior, synthetic coefficient recovery, and predictions staying unchanged when only future test rows are perturbed. Branch: `feat/t3-baselines`. W&B: N/A.
 Next: implement T4 walk-forward evaluation on top of the baseline predictor contract, with strictly expanding folds and per-fold MAE/QLIKE. Branch: `feat/t3-baselines`.
+
+## Day 3 (2026-04-21, 0.3h)
+Done: implemented walk-forward evaluation with target-only slice cleaning, added sparse-column regression coverage, and reconciled the local `feat/price-features` branch to the fetched remote head. Branch: `feat/t4-walkforward`. W&B: N/A.
+Next: push `feat/t4-walkforward` and open the T4 PR after the green local checks. Branch: `feat/t4-walkforward`.
