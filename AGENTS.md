@@ -27,6 +27,20 @@ Write your question to .agents/open-questions.md with the 2–3 options you cons
 - Always log: git commit, data version, full config, seed
 
 ## When done with a task
-1. Run `pytest -q` — must pass
-2. Commit: `<type>(<scope>): <desc>`  e.g. `feat(features): add HAR-RV features`
-3. Update notes/progress.md one-liner
+1. Run `pytest -q` and `ruff check .` — both must pass.
+2. Update `notes/progress.md` with a one-liner.
+3. If on `master`, create a branch: `git checkout -b <type>/<slug>` (e.g. `feat/har-rv-features`).
+4. Commit: `<type>(<scope>): <desc>` — code + tests in one commit.
+5. Push: `git push -u origin HEAD`
+6. Open PR:
+   ```
+   gh pr create \
+     --title "<same as commit message>" \
+     --body "## What\n<what changed>\n\n## Why\n<link to SPEC.md section or experiment rationale>\n\n## W&B run\n<URL if a model changed, else N/A>"
+   ```
+7. NEVER force-push to `master`. NEVER open a PR from a red branch.
+
+## Git & GitHub hygiene
+- Branch name: `<type>/<slug>` — e.g. `feat/har-rv-features`, `fix/leakage-scaler`.
+- One logical change per commit; code + tests travel together.
+- PRs must be green before merge; keep diffs under ~400 lines.
