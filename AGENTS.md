@@ -18,6 +18,18 @@ Lint: `ruff check .`
 ## Stopping rule
 See SPEC.md. Do not propose new experiments past 25 total hours.
 
+## Cross-Session Continuity
+- Every new session should read, in this order: `AGENTS.md`, `SPEC.md`, `notes/progress.md`, `.agents/open-questions.md`. Only then inspect code or other docs as needed.
+- Treat `notes/progress.md` and `.agents/open-questions.md` as the only intentional cross-session handoff files.
+- `notes/progress.md` is the append-only session log.
+- Each session entry should include one short `Done:` line and one short `Next:` line.
+- Include the current branch name in each entry and include W&B run IDs when relevant.
+- `.agents/open-questions.md` is the decision/blocker log.
+- Record unresolved questions only, with the 2-3 options considered.
+- Once a question is decided, remove it or mark it resolved so the file stays focused on active blockers.
+- Do not use `.codex/`, cache directories, `data/processed/`, notebooks' hidden checkpoints, or other ignored/tool-local paths as cross-session memory.
+- `CLAUDE.md` is a shim; keep it aligned with `AGENTS.md` and do not let it become a separate source of truth.
+
 ## When stuck
 Write your question to .agents/open-questions.md with the 2–3 options you considered. Do not guess.
 
