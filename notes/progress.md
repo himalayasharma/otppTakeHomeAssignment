@@ -33,3 +33,15 @@ Next: implement T4 walk-forward evaluation on top of the baseline predictor cont
 ## Day 3 (2026-04-21, 0.3h)
 Done: implemented walk-forward evaluation with target-only slice cleaning, added sparse-column regression coverage, and reconciled the local `feat/price-features` branch to the fetched remote head. Branch: `feat/t4-walkforward`. W&B: N/A.
 Next: push `feat/t4-walkforward` and open the T4 PR after the green local checks. Branch: `feat/t4-walkforward`.
+
+## Day 3 (2026-04-21, 0.4h)
+Done: added `python -m scripts.run_baselines` with dataset assembly, persistence/HAR walk-forward runs, W&B disabled-offline fallback, per-fold plus overall metric logging, and the T5 persistence guardrail; `pytest -q` and `ruff check .` are green, while the script currently exits non-zero because persistence MAE is 0.020326 vs the 0.009623 EDA reference. Branch: `feat/t5-run-baselines`. W&B: disabled local run only.
+Next: reconcile the EDA baseline definition with the current walk-forward target/evaluation contract before relying on the new baseline runner for reported numbers. Branch: `feat/t5-run-baselines`.
+
+## Day 3 (2026-04-21, 0.5h)
+Done: standardized the canonical persistence baseline to the walk-forward T+5 contract, updated the runner guardrail to MAE 0.020326, added regression tests plus dotenv-backed W&B loading, aligned the EDA findings and notebook source, and verified an online W&B baseline run. Branch: `feat/t5-run-baselines`. W&B: `uveixbx0`.
+Next: use the canonical walk-forward T+5 baseline as the comparison floor for price-only LightGBM and later LLM feature experiments. Branch: `feat/t5-run-baselines`.
+
+## Day 3 (2026-04-21, 0.2h)
+Done: added dedicated leakage regression tests proving price features are strict-past and HAR walk-forward fitting never sees test timestamps. Branch: `feat/t5-run-baselines`. W&B: N/A.
+Next: move on to the next price-only modeling task with the leak checks now locked in. Branch: `feat/t5-run-baselines`.
