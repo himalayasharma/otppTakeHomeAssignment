@@ -45,3 +45,7 @@ Next: use the canonical walk-forward T+5 baseline as the comparison floor for pr
 ## Day 3 (2026-04-21, 0.2h)
 Done: added dedicated leakage regression tests proving price features are strict-past and HAR walk-forward fitting never sees test timestamps. Branch: `feat/t5-run-baselines`. W&B: N/A.
 Next: move on to the next price-only modeling task with the leak checks now locked in. Branch: `feat/t5-run-baselines`.
+
+## Day 6 (2026-04-24, 0.3h)
+Done: captured canonical walk-forward T+5 baselines by re-running `scripts/run_baselines.py` offline — persistence overall MAE 0.020326 (QLIKE 1.066621), HAR-RV overall MAE 0.017170 (QLIKE 1.004981); HAR already beats persistence by 15.53% MAE, clearing the 5% floor for the price-only comparator. Reconciled the stale 0.009952/0.009454 references in `memory/project_otpp.md` and `SPEC.md` to the canonical floor (SPEC target recalibrated to ≈0.019310). Branch: `chore/reconcile-baselines`. W&B: N/A (offline).
+Next: use HAR-RV MAE 0.017170 as the price-only bar for upcoming LightGBM experiments; the "LLM adds value" ≥2% threshold is measured against that LightGBM price-only MAE once it lands. Branch: `chore/reconcile-baselines`.
