@@ -8,9 +8,10 @@ Primary: MAE of predicted 5-day realized vol on walk-forward held-out test.
 Secondary: Directional accuracy of T+1 return sign.
 
 ## Stopping rule
-- Target: LightGBM + LLM features beats persistence baseline by ≥5% MAE reduction
-- "LLM adds value" threshold: ≥2% MAE reduction vs LightGBM price-only
-- Time budget: 25 hrs
+- Target: LightGBM + LLM features beats canonical walk-forward T+5 persistence baseline (MAE 0.020326) by ≥5% MAE reduction (absolute target MAE ≲ 0.019310).
+- "LLM adds value" threshold: ≥2% MAE reduction vs LightGBM price-only.
+- Price-only HAR-RV reference (2026-04-24 offline run): MAE 0.017170 — already 15.53% below persistence; LightGBM price-only should at minimum match HAR before LLM features are layered on.
+- Time budget: 25 hrs.
 - If not hit: ship with honest limitations slide.
 
 ## Data
