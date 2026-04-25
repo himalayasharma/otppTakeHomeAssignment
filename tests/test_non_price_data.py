@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import sys
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 
@@ -93,6 +94,42 @@ def test_fetch_newsapi_headlines_paginates(monkeypatch: pytest.MonkeyPatch) -> N
     assert len(seen_urls) == 2
 
 
+def test_collect_newsapi_payload_passes_overlap_repair_profile_to_requests(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("NEWSAPI_KEY", "token")
+    seen_urls: list[str] = []
+
+    def fake_request_json(url: str) -> dict[str, object]:
+        seen_urls.append(url)
+        return {
+            "status": "ok",
+            "totalResults": 1,
+            "articles": [{"title": "A", "publishedAt": "2026-03-25T01:00:00Z"}],
+        }
+
+    monkeypatch.setattr(non_price_data, "_request_json", fake_request_json)
+
+    payload = non_price_data.collect_newsapi_payload(
+        query=non_price_data.NEWSAPI_OVERLAP_QUERY,
+        from_date="2026-03-25",
+        to_date="2026-03-25",
+        search_in=non_price_data.NEWSAPI_OVERLAP_SEARCH_IN,
+        domains=non_price_data.NEWSAPI_OVERLAP_DOMAINS,
+        query_profile=non_price_data.NEWSAPI_OVERLAP_REPAIR_PROFILE,
+    )
+
+    parsed = urlparse(seen_urls[0])
+    params = parse_qs(parsed.query)
+
+    assert params["q"] == [non_price_data.NEWSAPI_OVERLAP_QUERY]
+    assert params["searchIn"] == [non_price_data.NEWSAPI_OVERLAP_SEARCH_IN]
+    assert params["domains"] == [",".join(non_price_data.NEWSAPI_OVERLAP_DOMAINS)]
+    assert payload["metadata"]["query_profile"] == non_price_data.NEWSAPI_OVERLAP_REPAIR_PROFILE
+    assert payload["metadata"]["search_in"] == non_price_data.NEWSAPI_OVERLAP_SEARCH_IN
+    assert payload["metadata"]["domains"] == list(non_price_data.NEWSAPI_OVERLAP_DOMAINS)
+
+
 def test_fetch_fmp_stock_news_returns_list(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("FMP_KEY", "token")
     expected = [{"title": "NVIDIA", "publishedDate": "2026-04-01 12:00:00"}]
@@ -130,14 +167,131 @@ def test_fetch_newsapi_headlines_stops_on_maximum_results_limit(
     assert articles == [{"title": "A", "publishedAt": "2026-04-01T00:00:00Z"}]
 
 
+def test_collect_newsapi_payload_chunks_and_dedupes_across_windows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_fetch_impl(
+        query: str,
+        from_date: str,
+        to_date: str,
+        page_size: int = 100,
+        max_records: int = 500,
+        *,
+        search_in: str | None = None,
+        domains: tuple[str, ...] | None = None,
+    ) -> tuple[list[dict[str, object]], bool]:
+        del query, to_date, page_size, max_records, search_in, domains
+        records_by_window = {
+            "2026-03-22T00:00:00Z": [
+                {"title": "A", "publishedAt": "2026-03-22T01:00:00Z"},
+                {"title": "B", "publishedAt": "2026-03-22T12:00:00Z"},
+            ],
+            "2026-03-23T00:00:00Z": [
+                {"title": "B", "publishedAt": "2026-03-22T12:00:00Z"},
+                {"title": "C", "publishedAt": "2026-03-23T03:00:00Z"},
+            ],
+        }
+        return records_by_window[from_date], False
+
+    monkeypatch.setattr(non_price_data, "_fetch_newsapi_headlines_impl", fake_fetch_impl)
+
+    payload = non_price_data.collect_newsapi_payload(
+        query="NVDA",
+        from_date="2026-03-22",
+        to_date="2026-03-23",
+    )
+
+    assert [article["title"] for article in payload["articles"]] == ["A", "B", "C"]
+    assert payload["metadata"]["requested_range"] == {
+        "from": "2026-03-22",
+        "to": "2026-03-23",
+    }
+    assert payload["metadata"]["search_in"] is None
+    assert payload["metadata"]["domains"] == []
+    assert payload["metadata"]["chunking"]["strategy"] == "utc_day"
+    assert payload["metadata"]["chunking"]["windows_requested"] == 2
+    assert payload["metadata"]["chunking"]["windows_completed"] == 2
+    assert payload["metadata"]["chunking"]["windows"][0]["result_count"] == 2
+    assert payload["metadata"]["chunking"]["truncated_days"] == []
+    assert payload["metadata"]["collection_complete"] is True
+
+
+def test_collect_news_data_uses_overlap_repair_profile(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(non_price_data, "RAW_NEWS_DIR", tmp_path)
+    seen_kwargs: dict[str, object] = {}
+
+    def fake_collect_newsapi_payload(**kwargs: object) -> dict[str, object]:
+        seen_kwargs.update(kwargs)
+        return {
+            "metadata": {
+                "source": "NewsAPI",
+                "ticker": "NVDA",
+                "query_params": {
+                    "q": non_price_data.NEWSAPI_OVERLAP_QUERY,
+                    "searchIn": non_price_data.NEWSAPI_OVERLAP_SEARCH_IN,
+                    "domains": ",".join(non_price_data.NEWSAPI_OVERLAP_DOMAINS),
+                },
+                "notes": [],
+                "record_count": 1,
+                "collection_complete": True,
+                "chunking": {"truncated_days": []},
+                "query_profile": non_price_data.NEWSAPI_OVERLAP_REPAIR_PROFILE,
+                "search_in": non_price_data.NEWSAPI_OVERLAP_SEARCH_IN,
+                "domains": list(non_price_data.NEWSAPI_OVERLAP_DOMAINS),
+                "requested_range": {
+                    "from": non_price_data.DEFAULT_NEWSAPI_FROM_DATE,
+                    "to": non_price_data.DEFAULT_NEWSAPI_TO_DATE,
+                },
+            },
+            "articles": [{"title": "A", "publishedAt": "2026-04-01T00:00:00Z"}],
+        }
+
+    monkeypatch.setattr(non_price_data, "collect_newsapi_payload", fake_collect_newsapi_payload)
+    monkeypatch.setattr(
+        non_price_data,
+        "fetch_fmp_stock_news",
+        lambda **kwargs: [{"title": "B", "publishedDate": "2026-04-01 00:00:00"}],
+    )
+    monkeypatch.setattr(non_price_data, "load_dotenv", lambda: None)
+
+    non_price_data.collect_news_data()
+
+    assert seen_kwargs["query"] == non_price_data.NEWSAPI_OVERLAP_QUERY
+    assert seen_kwargs["search_in"] == non_price_data.NEWSAPI_OVERLAP_SEARCH_IN
+    assert seen_kwargs["domains"] == non_price_data.NEWSAPI_OVERLAP_DOMAINS
+    assert seen_kwargs["query_profile"] == non_price_data.NEWSAPI_OVERLAP_REPAIR_PROFILE
+    assert seen_kwargs["from_date"] == non_price_data.DEFAULT_NEWSAPI_FROM_DATE
+    assert seen_kwargs["to_date"] == non_price_data.DEFAULT_NEWSAPI_TO_DATE
+
+
 def test_collect_news_data_targets_expected_output_names(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
     monkeypatch.setattr(non_price_data, "RAW_NEWS_DIR", tmp_path)
     monkeypatch.setattr(
         non_price_data,
-        "fetch_newsapi_headlines",
-        lambda **kwargs: [{"title": "A", "publishedAt": "2026-04-01T00:00:00Z"}],
+        "collect_newsapi_payload",
+        lambda **kwargs: {
+            "metadata": {
+                "source": "NewsAPI",
+                "ticker": "NVDA",
+                "query_params": {},
+                "notes": [],
+                "record_count": 1,
+                "collection_complete": True,
+                "chunking": {"truncated_days": []},
+                "query_profile": non_price_data.NEWSAPI_OVERLAP_REPAIR_PROFILE,
+                "search_in": non_price_data.NEWSAPI_OVERLAP_SEARCH_IN,
+                "domains": list(non_price_data.NEWSAPI_OVERLAP_DOMAINS),
+                "requested_range": {
+                    "from": non_price_data.DEFAULT_NEWSAPI_FROM_DATE,
+                    "to": non_price_data.DEFAULT_NEWSAPI_TO_DATE,
+                },
+            },
+            "articles": [{"title": "A", "publishedAt": "2026-04-01T00:00:00Z"}],
+        },
     )
     monkeypatch.setattr(
         non_price_data,
@@ -160,8 +314,26 @@ def test_collect_news_data_writes_fmp_restriction_note(
     monkeypatch.setattr(non_price_data, "RAW_NEWS_DIR", tmp_path)
     monkeypatch.setattr(
         non_price_data,
-        "fetch_newsapi_headlines",
-        lambda **kwargs: [{"title": "A", "publishedAt": "2026-04-01T00:00:00Z"}],
+        "collect_newsapi_payload",
+        lambda **kwargs: {
+            "metadata": {
+                "source": "NewsAPI",
+                "ticker": "NVDA",
+                "query_params": {},
+                "notes": [],
+                "record_count": 1,
+                "collection_complete": True,
+                "chunking": {"truncated_days": []},
+                "query_profile": non_price_data.NEWSAPI_OVERLAP_REPAIR_PROFILE,
+                "search_in": non_price_data.NEWSAPI_OVERLAP_SEARCH_IN,
+                "domains": list(non_price_data.NEWSAPI_OVERLAP_DOMAINS),
+                "requested_range": {
+                    "from": non_price_data.DEFAULT_NEWSAPI_FROM_DATE,
+                    "to": non_price_data.DEFAULT_NEWSAPI_TO_DATE,
+                },
+            },
+            "articles": [{"title": "A", "publishedAt": "2026-04-01T00:00:00Z"}],
+        },
     )
     monkeypatch.setattr(
         non_price_data,
@@ -177,3 +349,43 @@ def test_collect_news_data_writes_fmp_restriction_note(
 
     assert payload["articles"] == []
     assert "Restricted Endpoint" in payload["metadata"]["notes"][1]
+
+
+def test_collect_news_data_fails_on_daily_cap_with_metadata_signal(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    monkeypatch.setattr(non_price_data, "RAW_NEWS_DIR", tmp_path)
+    original_newsapi_payload = {"metadata": {"source": "existing"}, "articles": []}
+    original_fmp_payload = {"metadata": {"source": "existing-fmp"}, "articles": []}
+    newsapi_path = tmp_path / non_price_data.DEFAULT_NEWSAPI_FILENAME
+    fmp_path = tmp_path / non_price_data.DEFAULT_FMP_FILENAME
+    newsapi_path.write_text(json.dumps(original_newsapi_payload), encoding="utf-8")
+    fmp_path.write_text(json.dumps(original_fmp_payload), encoding="utf-8")
+    monkeypatch.setattr(
+        non_price_data,
+        "_fetch_newsapi_headlines_impl",
+        lambda **kwargs: (
+            [{"title": "A", "publishedAt": "2026-03-22T01:00:00Z"}],
+            True,
+        ),
+    )
+    monkeypatch.setattr(
+        non_price_data,
+        "fetch_fmp_stock_news",
+        lambda **kwargs: [{"title": "B", "publishedDate": "2026-04-01 00:00:00"}],
+    )
+    monkeypatch.setattr(non_price_data, "load_dotenv", lambda: None)
+
+    with pytest.raises(non_price_data.NewsAPITruncationError) as exc_info:
+        non_price_data.collect_news_data(
+            newsapi_from_date="2026-03-22",
+            newsapi_to_date="2026-03-22",
+        )
+
+    payload = exc_info.value.payload
+
+    assert payload["metadata"]["collection_complete"] is False
+    assert payload["metadata"]["chunking"]["truncated_days"] == ["2026-03-22"]
+    assert "NewsAPI daily cap reached" in payload["metadata"]["notes"][1]
+    assert json.loads(newsapi_path.read_text(encoding="utf-8")) == original_newsapi_payload
+    assert json.loads(fmp_path.read_text(encoding="utf-8")) == original_fmp_payload

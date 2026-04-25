@@ -76,3 +76,11 @@ Next: wire `attach_news(...)` / `attach_all(...)` into the LightGBM `price+news`
 ## Day 7 (2026-04-25, 1.2h)
 Done: implemented `scripts/run_lightgbm.py --ablation`, added persisted `data/processed/ablation_results.csv` plus ablation smoke coverage, generated real `data/processed/news_scores.parquet`, and verified `uv run pytest -q`, `uv run ruff check .`, and `uv run python -m scripts.run_lightgbm --ablation`; the real run produced price MAE 0.016618, price+finbert MAE 0.016983, and `NaN` rows for `price+news` / `price+all` because the news daily dates (2026-04-19/2026-04-20) are after the frozen price history through 2026-04-17. Branch: `feat/lightgbm-ablation`. W&B: `rktkzxdx`.
 Next: decide whether to keep the four-way table as an explicit data-coverage limitation in the report or approve a separate raw-data refresh task to create actual price/news overlap. Branch: `feat/lightgbm-ablation`.
+
+## Day 7 (2026-04-25, 1.0h)
+Done: added zero-overlap validation to `scripts/run_lightgbm.py --ablation`, switched NewsAPI collection to 1-day UTC windows with explicit truncation metadata/failure, added regression coverage, and verified `uv run pytest -q`, `uv run ruff check .`, and the real CLI failure path; on 2026-04-25 NewsAPI rejected `2026-03-24` as too old, accepted `2026-03-25`, then hit `totalResults=348` for that day so the raw refresh now stops with `NewsAPITruncationError` instead of silently shipping partial overlap. Branch: `feat/lightgbm-ablation`. W&B: N/A.
+Next: decide whether to narrow the NewsAPI query or switch the news source so a complete overlapping corpus can be recollected and the four-way ablation rerun honestly. Branch: `feat/lightgbm-ablation`.
+
+## Day 7 (2026-04-25, 0.7h)
+Done: finalized the NewsAPI overlap-repair path by defining the narrowed `title`+domain-whitelist query profile, making raw writes atomic and non-overwriting on incomplete recollection, and gating `scripts/build_news_scores.py` on complete overlap-profile metadata; verified `uv run pytest -q`, `uv run ruff check .`, and the builder now refuses the existing invalid raw NewsAPI corpus before scoring. Branch: `feat/lightgbm-ablation`. W&B: N/A.
+Next: run the real narrowed NewsAPI recollection, rebuild `news_scores.parquet`, and rerun the four-way ablation once raw-data refresh is intentionally authorized. Branch: `feat/lightgbm-ablation`.
