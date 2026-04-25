@@ -56,3 +56,7 @@ Next: merge FinBERT call-level scores into the downstream LLM feature assembly s
 ## Day 6 (2026-04-24, 0.5h)
 Done: added `src/models/lightgbm_model.py`, `scripts/run_lightgbm.py` (`--features {price,price+finbert,price+news,price+all}`, non-price branches NotImplementedError), and `tests/test_lightgbm.py` (determinism, shape, leakage, canonical MAE gate). Price-only walk-forward MAE 0.016618 ≤ HAR 0.017170 with sane defaults — no tuning. `pytest -q` 49 passed / 1 skipped, `ruff check .` clean. Branch: `feat/lightgbm-price-only`. W&B: disabled (no API key in env).
 Next: T2 — FinBERT join into the feature frame with strict-past, days-since-last-call, then T3 LightGBM + FinBERT ablation. Branch: `feat/lightgbm-price-only`.
+
+## Day 6 (2026-04-24, 0.4h)
+Done: added strict-past FinBERT join features in `src/features/llm_features.py` with isolated synthetic tests in `tests/test_llm_features.py`; `uv run pytest -q tests/test_llm_features.py`, `uv run pytest -q`, and `uv run ruff check .` all passed. Branch: `feat/llm-features-finbert-join`. W&B: N/A.
+Next: wire the FinBERT feature frame into the LightGBM `price+finbert` path and measure the MAE delta versus the price-only baseline. Branch: `feat/llm-features-finbert-join`.
