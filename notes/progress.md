@@ -91,3 +91,7 @@ Next: decide whether to report the news ablation as structurally blocked under t
 ## Day 7 (2026-04-25, 0.6h)
 Done: replaced the ablation runner's zero-overlap guard with a canonical split-aware estimability preflight, added regressions for zero-overlap and tail-only-valid/no-trainable-fold failures, and updated the planning narrative to report the news ablation as structurally blocked under the unchanged split and current NewsAPI history. Branch: `feat/lightgbm-ablation`. W&B: N/A.
 Next: keep the canonical split fixed unless a longer historical news source is approved; blocked news variants should now fail fast without overwriting `data/processed/ablation_results.csv`. Branch: `feat/lightgbm-ablation`.
+
+## Day 7 (2026-04-25, 1.0h)
+Done: added manifest-driven transcript backfill/scoring, collected 15 missing FinBERT transcript files without overwriting existing raw files, rebuilt 21-row `finbert_scores.parquet`, and reran price+FinBERT with equal coverage; MAE is 0.016759 vs price-only 0.016618 (`delta_rel=+0.008484`). Branch: `feat/finbert-transcript-coverage`. W&B: `p9dtlvkb`.
+Next: carry the repaired FinBERT ablation into the report as a clean negative result, while keeping news variants blocked unless a longer historical news source is approved. Branch: `feat/finbert-transcript-coverage`.
