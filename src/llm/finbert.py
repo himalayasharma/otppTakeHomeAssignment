@@ -14,14 +14,6 @@ from transformers import AutoModelForSequenceClassification, AutoTokenizer
 MODEL_NAME = "ProsusAI/finbert"
 BATCH_SIZE = 32
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-CALL_DATES = {
-    "2024-Q3": "2024-11-20",
-    "2025-Q4": "2025-02-26",
-    "2025-Q1": "2025-05-28",
-    "2025-Q2": "2025-08-27",
-    "2025-Q3": "2025-11-19",
-    "2026-Q4": "2026-02-25",
-}
 OUTPUT_COLUMNS = [
     "call_date",
     "pos_mean",
@@ -156,14 +148,7 @@ def aggregate_call(sentence_scores: list[dict[str, float]]) -> dict[str, float]:
     }
 
 
-def _call_date_for_path(path: Path) -> pd.Timestamp:
-    try:
-        return pd.Timestamp(CALL_DATES[path.stem])
-    except KeyError as exc:
-        raise ValueError(f"Unknown transcript filename stem: {path.stem!r}") from exc
-
-
-def score_transcript(path: Path) -> dict[str, object]:
+def score_transcript(path: Path, *, call_date: pd.Timestamp | str) -> dict[str, object]:
     text = path.read_text(encoding="utf-8")
     sentences = _split_sentences(text)
     if not sentences:
@@ -171,7 +156,7 @@ def score_transcript(path: Path) -> dict[str, object]:
 
     aggregated = aggregate_call(_score_texts(sentences))
     return {
-        "call_date": _call_date_for_path(path),
+        "call_date": pd.Timestamp(call_date),
         "n_sentences": int(len(sentences)),
         **aggregated,
     }
