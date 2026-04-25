@@ -68,3 +68,7 @@ Next: proceed to the news-feature path and final ablation table, carrying forwar
 ## Day 6 (2026-04-24, 0.8h)
 Done: added Claude news extraction in `src/llm/news_extract.py`, the `scripts/build_news_scores.py` builder, and end-to-end mocked coverage for structured parse retries, cost accounting, aggregation, and parquet writing; `uv run pytest -q` and `uv run ruff check .` passed, while the real builder exits cleanly because `ANTHROPIC_API_KEY` is unset in this environment. Branch: `feat/claude-news-extract`. W&B: N/A.
 Next: run the real news scoring job once `ANTHROPIC_API_KEY` is available, then wire the daily news parquet into the downstream feature frame for the price+news and price+all ablations. Branch: `feat/claude-news-extract`.
+
+## Day 7 (2026-04-25, 0.5h)
+Done: implemented strict-past daily news joins plus `attach_all(...)` in `src/features/llm_features.py`, added synthetic leakage/missing-history/composition/parquet tests, and verified `uv run pytest -q` (69 passed, 1 skipped) plus `uv run ruff check .` on `feat/llm-features-news-join`. Branch: `feat/llm-features-news-join`. W&B: N/A.
+Next: wire `attach_news(...)` / `attach_all(...)` into the LightGBM `price+news` and `price+all` ablation paths and measure the deltas versus the price-only baseline. Branch: `feat/llm-features-news-join`.
