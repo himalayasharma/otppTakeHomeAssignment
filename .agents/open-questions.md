@@ -1,0 +1,4 @@
+- 2026-04-25 on `feat/lightgbm-ablation`: `data/processed/news_scores.parquet` was generated from the real NewsAPI corpus, but its only `as_of` dates are 2026-04-19 and 2026-04-20 while `data/raw/nvda_prices.parquet` ends on 2026-04-17, so `price+news` and `price+all` have zero valid walk-forward rows.
+- Option 1: keep `data/processed/ablation_results.csv` as the honest real-run artifact with `NaN` news rows and document the date-overlap limitation in `REPORT.md`.
+- Option 2: approve a follow-up task to refresh overlapping raw inputs, since changing `data/raw/` is outside the current in-session rules.
+- Option 3: drop the news variants from the final table, which conflicts with the requested four-way ablation and is the weakest option.

@@ -12,9 +12,11 @@ sys.path.insert(0, str(REPO_ROOT))
 
 import scripts.run_lightgbm as run_lightgbm  # noqa: E402
 from scripts.run_lightgbm import (  # noqa: E402
+    PRICE_ALL_FEATURE_COLUMNS,
     HAR_REFERENCE_MAE,
     N_FOLDS,
     PRICE_FINBERT_FEATURE_COLUMNS,
+    PRICE_NEWS_FEATURE_COLUMNS,
     PRICE_ONLY_FEATURE_COLUMNS,
     TARGET_COL,
     TEST_FRACTION,
@@ -257,4 +259,81 @@ def test_main_price_plus_finbert_runs_side_by_side(monkeypatch: pytest.MonkeyPat
     assert dummy_run.summary["comparison/mae_price_finbert"] == pytest.approx(0.001)
     assert dummy_run.summary["comparison/mae_delta_abs"] == 0.0
     assert dummy_run.summary["comparison/mae_delta_rel"] == 0.0
+    assert dummy_run.finished is True
+
+
+def test_main_ablation_writes_summary_csv(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    captured_feature_cols: list[tuple[str, ...]] = []
+    dummy_run = _DummyRun()
+    output_path = tmp_path / "ablation_results.csv"
+
+    def fake_attach_finbert(df: pd.DataFrame) -> pd.DataFrame:
+        out = df.copy()
+        for idx, column in enumerate(run_lightgbm.FINBERT_FEATURE_COLUMNS, start=1):
+            out[column] = np.linspace(0.01 * idx, 0.02 * idx, len(out), dtype=np.float64)
+        return out
+
+    def fake_attach_news(df: pd.DataFrame) -> pd.DataFrame:
+        out = df.copy()
+        for idx, column in enumerate(run_lightgbm.NEWS_FEATURE_COLUMNS, start=1):
+            out[column] = np.linspace(1.0 * idx, 2.0 * idx, len(out), dtype=np.float64)
+        return out
+
+    def fake_attach_all(df: pd.DataFrame) -> pd.DataFrame:
+        return fake_attach_news(fake_attach_finbert(df))
+
+    def fake_fit_predict(
+        *,
+        train_df: pd.DataFrame,
+        test_df: pd.DataFrame,
+        target_col: str,
+        feature_cols: list[str],
+        seed: int,
+    ) -> np.ndarray:
+        del train_df, seed
+        captured_feature_cols.append(tuple(feature_cols))
+        return test_df[target_col].to_numpy(dtype=np.float64, copy=True) + 0.001
+
+    monkeypatch.setattr(run_lightgbm, "load_prices", lambda: _synthetic_loaded_prices())
+    monkeypatch.setattr(run_lightgbm, "attach_finbert", fake_attach_finbert)
+    monkeypatch.setattr(run_lightgbm, "attach_news", fake_attach_news)
+    monkeypatch.setattr(run_lightgbm, "attach_all", fake_attach_all)
+    monkeypatch.setattr(run_lightgbm, "fit_predict", fake_fit_predict)
+    monkeypatch.setattr(run_lightgbm, "_git_commit", lambda: "testsha")
+    monkeypatch.setattr(run_lightgbm, "_init_wandb", lambda config: (dummy_run, "disabled"))
+    monkeypatch.setattr(run_lightgbm.wandb, "Table", lambda dataframe: dataframe)
+    monkeypatch.setattr(run_lightgbm, "ABLATION_RESULTS_PATH", output_path)
+
+    exit_code = run_lightgbm.main(["--ablation"])
+    captured = capsys.readouterr()
+    result_df = pd.read_csv(output_path)
+
+    assert exit_code == 0
+    assert output_path.exists()
+    assert tuple(PRICE_ONLY_FEATURE_COLUMNS) in captured_feature_cols
+    assert tuple(PRICE_FINBERT_FEATURE_COLUMNS) in captured_feature_cols
+    assert tuple(PRICE_NEWS_FEATURE_COLUMNS) in captured_feature_cols
+    assert tuple(PRICE_ALL_FEATURE_COLUMNS) in captured_feature_cols
+    assert result_df.shape[0] == 4
+    assert list(result_df.columns) == [
+        "feature_set",
+        "overall_mae",
+        "fold_1_mae",
+        "fold_2_mae",
+        "fold_3_mae",
+        "fold_4_mae",
+        "fold_5_mae",
+        "overall_qlike",
+    ]
+    assert result_df["feature_set"].tolist() == [
+        "price",
+        "price+finbert",
+        "price+news",
+        "price+all",
+    ]
+    assert "| feature_set | overall_mae | fold_1_mae |" in captured.out
     assert dummy_run.finished is True

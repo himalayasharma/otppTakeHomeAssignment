@@ -72,3 +72,7 @@ Next: run the real news scoring job once `ANTHROPIC_API_KEY` is available, then 
 ## Day 7 (2026-04-25, 0.5h)
 Done: implemented strict-past daily news joins plus `attach_all(...)` in `src/features/llm_features.py`, added synthetic leakage/missing-history/composition/parquet tests, and verified `uv run pytest -q` (69 passed, 1 skipped) plus `uv run ruff check .` on `feat/llm-features-news-join`. Branch: `feat/llm-features-news-join`. W&B: N/A.
 Next: wire `attach_news(...)` / `attach_all(...)` into the LightGBM `price+news` and `price+all` ablation paths and measure the deltas versus the price-only baseline. Branch: `feat/llm-features-news-join`.
+
+## Day 7 (2026-04-25, 1.2h)
+Done: implemented `scripts/run_lightgbm.py --ablation`, added persisted `data/processed/ablation_results.csv` plus ablation smoke coverage, generated real `data/processed/news_scores.parquet`, and verified `uv run pytest -q`, `uv run ruff check .`, and `uv run python -m scripts.run_lightgbm --ablation`; the real run produced price MAE 0.016618, price+finbert MAE 0.016983, and `NaN` rows for `price+news` / `price+all` because the news daily dates (2026-04-19/2026-04-20) are after the frozen price history through 2026-04-17. Branch: `feat/lightgbm-ablation`. W&B: `rktkzxdx`.
+Next: decide whether to keep the four-way table as an explicit data-coverage limitation in the report or approve a separate raw-data refresh task to create actual price/news overlap. Branch: `feat/lightgbm-ablation`.
