@@ -84,3 +84,11 @@ Next: decide whether to narrow the NewsAPI query or switch the news source so a 
 ## Day 7 (2026-04-25, 0.7h)
 Done: finalized the NewsAPI overlap-repair path by defining the narrowed `title`+domain-whitelist query profile, making raw writes atomic and non-overwriting on incomplete recollection, and gating `scripts/build_news_scores.py` on complete overlap-profile metadata; verified `uv run pytest -q`, `uv run ruff check .`, and the builder now refuses the existing invalid raw NewsAPI corpus before scoring. Branch: `feat/lightgbm-ablation`. W&B: N/A.
 Next: run the real narrowed NewsAPI recollection, rebuild `news_scores.parquet`, and rerun the four-way ablation once raw-data refresh is intentionally authorized. Branch: `feat/lightgbm-ablation`.
+
+## Day 7 (2026-04-25, 0.8h)
+Done: ran the full narrowed-profile refresh end to end: recollected `newsapi_2026_04.json` with `collection_complete=true` (75 articles, max daily count 13), rebuilt `data/processed/news_scores.parquet` (16 daily rows), and reran `scripts.run_lightgbm --ablation`; the W&B run `aqx9j1ei` confirmed the raw/scoring repair worked, but `price+news` and `price+all` still remain `NaN` because the first strict-past news features start on 2026-03-25 and the current fold-5 training window ends before any trainable news row exists. Branch: `feat/lightgbm-ablation`. W&B: `aqx9j1ei`.
+Next: decide whether to report the news ablation as structurally blocked under the current split and NewsAPI history, or approve a comparable evaluation/source change that creates trainable strict-past news rows. Branch: `feat/lightgbm-ablation`.
+
+## Day 7 (2026-04-25, 0.6h)
+Done: replaced the ablation runner's zero-overlap guard with a canonical split-aware estimability preflight, added regressions for zero-overlap and tail-only-valid/no-trainable-fold failures, and updated the planning narrative to report the news ablation as structurally blocked under the unchanged split and current NewsAPI history. Branch: `feat/lightgbm-ablation`. W&B: N/A.
+Next: keep the canonical split fixed unless a longer historical news source is approved; blocked news variants should now fail fast without overwriting `data/processed/ablation_results.csv`. Branch: `feat/lightgbm-ablation`.

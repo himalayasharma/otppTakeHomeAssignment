@@ -3,11 +3,13 @@ from __future__ import annotations
 import argparse
 import os
 import subprocess
+import sys
+import warnings
 from datetime import datetime
 from pathlib import Path
 from typing import Any
-import warnings
 
+import numpy as np
 import pandas as pd
 import wandb
 from dotenv import load_dotenv
@@ -15,6 +17,7 @@ from dotenv import load_dotenv
 from src.data.loader import load_prices
 from src.eval.walkforward import walk_forward
 from src.features.llm_features import (
+    DEFAULT_NEWS_SCORES_PATH,
     FINBERT_FEATURE_COLUMNS,
     NEWS_FEATURE_COLUMNS,
     attach_all,
@@ -52,22 +55,30 @@ def _with_target(feature_df: pd.DataFrame) -> pd.DataFrame:
 
 
 def _build_dataset(base_feature_df: pd.DataFrame | None = None) -> pd.DataFrame:
-    featured_prices = _build_price_feature_frame() if base_feature_df is None else base_feature_df
+    featured_prices = (
+        _build_price_feature_frame() if base_feature_df is None else base_feature_df
+    )
     return _with_target(featured_prices)
 
 
 def _build_finbert_dataset(base_feature_df: pd.DataFrame | None = None) -> pd.DataFrame:
-    featured_prices = _build_price_feature_frame() if base_feature_df is None else base_feature_df
+    featured_prices = (
+        _build_price_feature_frame() if base_feature_df is None else base_feature_df
+    )
     return _with_target(attach_finbert(featured_prices))
 
 
 def _build_news_dataset(base_feature_df: pd.DataFrame | None = None) -> pd.DataFrame:
-    featured_prices = _build_price_feature_frame() if base_feature_df is None else base_feature_df
+    featured_prices = (
+        _build_price_feature_frame() if base_feature_df is None else base_feature_df
+    )
     return _with_target(attach_news(featured_prices))
 
 
 def _build_all_dataset(base_feature_df: pd.DataFrame | None = None) -> pd.DataFrame:
-    featured_prices = _build_price_feature_frame() if base_feature_df is None else base_feature_df
+    featured_prices = (
+        _build_price_feature_frame() if base_feature_df is None else base_feature_df
+    )
     return _with_target(attach_all(featured_prices))
 
 
@@ -322,6 +333,194 @@ def _run_feature_set(
     return str(spec["model_name"]), result
 
 
+def _valid_row_mask(dataset: pd.DataFrame, feature_cols: list[str]) -> pd.Series:
+    valid_rows = dataset[TARGET_COL].notna()
+    for column in feature_cols:
+        valid_rows &= dataset[column].notna()
+    return valid_rows
+
+
+def _price_date_range(dataset: pd.DataFrame) -> tuple[str, str]:
+    return (
+        pd.Timestamp(dataset.index.min()).date().isoformat(),
+        pd.Timestamp(dataset.index.max()).date().isoformat(),
+    )
+
+
+def _latest_target_eligible_price_date(dataset: pd.DataFrame) -> str | None:
+    valid_target_dates = dataset.index[dataset[TARGET_COL].notna()]
+    if len(valid_target_dates) == 0:
+        return None
+    return pd.Timestamp(valid_target_dates.max()).date().isoformat()
+
+
+def _news_as_of_range() -> tuple[str | None, str | None]:
+    scores = pd.read_parquet(DEFAULT_NEWS_SCORES_PATH, columns=["as_of"])
+    if scores.empty:
+        return None, None
+    as_of = pd.to_datetime(scores["as_of"])
+    return as_of.min().date().isoformat(), as_of.max().date().isoformat()
+
+
+def _feature_valid_date_range(
+    dataset: pd.DataFrame,
+    feature_cols: list[str],
+) -> tuple[str | None, str | None]:
+    valid_index = dataset.index[_valid_row_mask(dataset, feature_cols)]
+    if len(valid_index) == 0:
+        return None, None
+    return (
+        pd.Timestamp(valid_index.min()).date().isoformat(),
+        pd.Timestamp(valid_index.max()).date().isoformat(),
+    )
+
+
+def _walkforward_chunk_indexes(
+    dataset: pd.DataFrame,
+    *,
+    n_folds: int,
+    test_fraction: float,
+) -> list[pd.Index]:
+    sorted_df = dataset.sort_index()
+    test_start_idx = int(len(sorted_df) * (1.0 - test_fraction))
+    test_start_idx = min(max(test_start_idx, 1), len(sorted_df) - 1)
+
+    tail_df = sorted_df.iloc[test_start_idx:]
+    return [
+        pd.Index(chunk, name=tail_df.index.name)
+        for chunk in np.array_split(tail_df.index.to_numpy(), n_folds)
+        if len(chunk) > 0
+    ]
+
+
+def _fold_valid_counts(
+    dataset: pd.DataFrame,
+    *,
+    feature_cols: list[str],
+    n_folds: int,
+    test_fraction: float,
+) -> list[dict[str, int | str | None]]:
+    sorted_df = dataset.sort_index()
+    fold_counts: list[dict[str, int | str | None]] = []
+
+    for fold_number, chunk_index in enumerate(
+        _walkforward_chunk_indexes(
+            sorted_df,
+            n_folds=n_folds,
+            test_fraction=test_fraction,
+        ),
+        start=1,
+    ):
+        train_slice = sorted_df.loc[sorted_df.index < chunk_index[0]]
+        test_slice = sorted_df.loc[chunk_index]
+
+        train_valid = int(_valid_row_mask(train_slice, feature_cols).sum())
+        test_valid = int(_valid_row_mask(test_slice, feature_cols).sum())
+
+        fold_counts.append(
+            {
+                "fold": fold_number,
+                "train_start": _date_or_none(
+                    train_slice.index.min() if len(train_slice) else None
+                ),
+                "train_end": _date_or_none(
+                    train_slice.index.max() if len(train_slice) else None
+                ),
+                "test_start": _date_or_none(
+                    test_slice.index.min() if len(test_slice) else None
+                ),
+                "test_end": _date_or_none(
+                    test_slice.index.max() if len(test_slice) else None
+                ),
+                "train_valid": train_valid,
+                "test_valid": test_valid,
+            }
+        )
+
+    return fold_counts
+
+
+def _non_estimable_feature_set_message(
+    *,
+    feature_set: str,
+    dataset: pd.DataFrame,
+    feature_cols: list[str],
+) -> str:
+    price_start, price_end = _price_date_range(dataset)
+    latest_target_date = _latest_target_eligible_price_date(dataset)
+    feature_valid_start, feature_valid_end = _feature_valid_date_range(
+        dataset, feature_cols
+    )
+    fold_counts = _fold_valid_counts(
+        dataset,
+        feature_cols=feature_cols,
+        n_folds=N_FOLDS,
+        test_fraction=TEST_FRACTION,
+    )
+    feature_valid_range = (
+        f"{feature_valid_start} to {feature_valid_end}"
+        if feature_valid_start is not None and feature_valid_end is not None
+        else "none"
+    )
+    per_fold_counts = "\n".join(
+        (
+            f"  fold_{fold_count['fold']}: "
+            f"train_valid={fold_count['train_valid']} "
+            f"test_valid={fold_count['test_valid']} "
+            f"train_range={fold_count['train_start'] or 'none'} to "
+            f"{fold_count['train_end'] or 'none'} "
+            f"test_range={fold_count['test_start'] or 'none'} to "
+            f"{fold_count['test_end'] or 'none'}"
+        )
+        for fold_count in fold_counts
+    )
+    message = (
+        f"Feature set '{feature_set}' has no estimable fold under the canonical "
+        f"walk-forward split (n_folds={N_FOLDS}, test_fraction={TEST_FRACTION}).\n"
+        f"Price date range: {price_start} to {price_end}.\n"
+        f"Latest target-eligible price date: {latest_target_date or 'none'}.\n"
+        f"Feature-valid date range: {feature_valid_range}.\n"
+        f"Per-fold valid train/test counts:\n{per_fold_counts}"
+    )
+    if "news" in feature_set:
+        news_start, news_end = _news_as_of_range()
+        message += (
+            "\nNews as_of range: "
+            f"{news_start or 'none'} to {news_end or 'none'}.\n"
+            "Current NewsAPI history is too short to support strict-past training "
+            "under the canonical split."
+        )
+    return message
+
+
+def _validate_feature_set_estimable(
+    *,
+    feature_set: str,
+    dataset: pd.DataFrame,
+    feature_cols: list[str],
+) -> None:
+    fold_counts = _fold_valid_counts(
+        dataset,
+        feature_cols=feature_cols,
+        n_folds=N_FOLDS,
+        test_fraction=TEST_FRACTION,
+    )
+    has_estimable_fold = any(
+        fold_count["train_valid"] > 0 and fold_count["test_valid"] > 0
+        for fold_count in fold_counts
+    )
+    if has_estimable_fold:
+        return
+
+    raise ValueError(
+        _non_estimable_feature_set_message(
+            feature_set=feature_set,
+            dataset=dataset,
+            feature_cols=feature_cols,
+        )
+    )
+
+
 def _selected_feature_sets(args: argparse.Namespace) -> list[str]:
     if args.ablation:
         return FEATURE_SET_ORDER.copy()
@@ -361,6 +560,13 @@ def _write_ablation_summary(summary_df: pd.DataFrame) -> None:
     summary_df.to_csv(ABLATION_RESULTS_PATH, index=False)
 
 
+def _ablation_summary_is_finite(summary_df: pd.DataFrame) -> bool:
+    numeric_values = summary_df.select_dtypes(include=["number"]).to_numpy(
+        dtype="float64"
+    )
+    return bool(np.isfinite(numeric_values).all())
+
+
 def _format_markdown_value(value: object) -> str:
     if pd.isna(value):
         return "nan"
@@ -375,14 +581,6 @@ def _print_markdown_table(df: pd.DataFrame) -> None:
     print("| " + " | ".join(["---"] * len(columns)) + " |")
     for row in df.itertuples(index=False, name=None):
         print("| " + " | ".join(_format_markdown_value(value) for value in row) + " |")
-
-
-def _nan_feature_sets(feature_set_results: dict[str, dict[str, Any]]) -> list[str]:
-    return [
-        feature_set
-        for feature_set, result in feature_set_results.items()
-        if pd.isna(result["overall"]["mae"])
-    ]
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -412,6 +610,22 @@ def main(argv: list[str] | None = None) -> int:
             "feature_cols"
         ]
 
+    try:
+        datasets: dict[str, pd.DataFrame] = {}
+        for feature_set in selected_feature_sets:
+            dataset_for_feature_set = feature_set_registry[feature_set]["dataset_builder"](
+                base_feature_df
+            )
+            _validate_feature_set_estimable(
+                feature_set=feature_set,
+                dataset=dataset_for_feature_set,
+                feature_cols=feature_set_registry[feature_set]["feature_cols"],
+            )
+            datasets[feature_set] = dataset_for_feature_set
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
     run, wandb_mode = _init_wandb(config)
     run.summary["wandb_mode"] = wandb_mode
 
@@ -420,16 +634,31 @@ def main(argv: list[str] | None = None) -> int:
         results: dict[str, dict[str, Any]] = {}
         feature_set_results: dict[str, dict[str, Any]] = {}
         for feature_set in selected_feature_sets:
-            model_name, result = _run_feature_set(
-                feature_set=feature_set,
-                base_feature_df=base_feature_df,
-                registry=feature_set_registry,
+            spec = feature_set_registry[feature_set]
+            model_name = str(spec["model_name"])
+            result = walk_forward(
+                datasets[feature_set],
+                fit_fn=_lightgbm_fit_fn(
+                    target_col=TARGET_COL,
+                    feature_cols=spec["feature_cols"],
+                    seed=SEED,
+                ),
+                target_col=TARGET_COL,
+                n_folds=N_FOLDS,
+                test_fraction=TEST_FRACTION,
             )
             results[model_name] = result
             feature_set_results[feature_set] = result
 
         if args.ablation:
             ablation_summary = _ablation_summary_frame(feature_set_results)
+            if not _ablation_summary_is_finite(ablation_summary):
+                print(
+                    "Ablation summary contains non-finite metrics; refusing to overwrite "
+                    f"{ABLATION_RESULTS_PATH}.",
+                    file=sys.stderr,
+                )
+                return 1
             _write_ablation_summary(ablation_summary)
             run.log({"lightgbm/ablation_summary": wandb.Table(dataframe=ablation_summary)})
         elif args.features != "price":
@@ -450,13 +679,6 @@ def main(argv: list[str] | None = None) -> int:
     if args.ablation:
         print("Ablation summary (walk-forward T+5 target)")
         _print_markdown_table(ablation_summary)
-        missing_feature_sets = _nan_feature_sets(feature_set_results)
-        if missing_feature_sets:
-            print(
-                "Warning: no valid walk-forward rows for "
-                + ", ".join(missing_feature_sets)
-                + ". Check feature/target date overlap."
-            )
         print(f"Wrote ablation summary to {ABLATION_RESULTS_PATH}")
     else:
         _print_table(
