@@ -52,3 +52,7 @@ Next: use HAR-RV MAE 0.017170 as the price-only bar for upcoming LightGBM experi
 ## Day 6 (2026-04-24, 1.0h)
 Done: implemented `src/llm/finbert.py`, `scripts/build_finbert_scores.py`, and `tests/test_finbert.py`; verified transcript call dates, generated `data/processed/finbert_scores.parquet` with 6 rows / strict schema, and kept `ruff check .`, `pytest -q`, and the gated slow FinBERT test green. Branch: `feat/finbert-earnings-call-scores`. W&B: N/A.
 Next: merge FinBERT call-level scores into the downstream LLM feature assembly step with a strict-past join against the price frame, without double-shifting the event dates. Branch: `feat/finbert-earnings-call-scores`.
+
+## Day 6 (2026-04-24, 0.5h)
+Done: added `src/models/lightgbm_model.py`, `scripts/run_lightgbm.py` (`--features {price,price+finbert,price+news,price+all}`, non-price branches NotImplementedError), and `tests/test_lightgbm.py` (determinism, shape, leakage, canonical MAE gate). Price-only walk-forward MAE 0.016618 ≤ HAR 0.017170 with sane defaults — no tuning. `pytest -q` 49 passed / 1 skipped, `ruff check .` clean. Branch: `feat/lightgbm-price-only`. W&B: disabled (no API key in env).
+Next: T2 — FinBERT join into the feature frame with strict-past, days-since-last-call, then T3 LightGBM + FinBERT ablation. Branch: `feat/lightgbm-price-only`.
