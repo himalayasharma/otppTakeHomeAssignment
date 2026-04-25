@@ -5,13 +5,16 @@ import sys
 
 import numpy as np
 import pandas as pd
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
+import scripts.run_lightgbm as run_lightgbm  # noqa: E402
 from scripts.run_lightgbm import (  # noqa: E402
     HAR_REFERENCE_MAE,
     N_FOLDS,
+    PRICE_FINBERT_FEATURE_COLUMNS,
     PRICE_ONLY_FEATURE_COLUMNS,
     TARGET_COL,
     TEST_FRACTION,
@@ -51,6 +54,40 @@ def _synthetic_frame(periods: int = 240, seed: int = 7) -> pd.DataFrame:
         },
         index=index,
     )
+
+
+def _synthetic_loaded_prices(periods: int = 120) -> pd.DataFrame:
+    index = pd.bdate_range("2024-01-01", periods=periods, name="date")
+    base_close = np.linspace(100.0, 140.0, periods)
+    close = base_close + 1.5 * np.sin(np.linspace(0.0, 6.0 * np.pi, periods))
+    returns = pd.Series(np.log(close), index=index).diff()
+    realized_vol_5d = np.sqrt(returns.pow(2).rolling(window=5, min_periods=4).sum())
+
+    return pd.DataFrame(
+        {
+            "open": (close - 0.4).astype("float64"),
+            "high": (close + 0.8).astype("float64"),
+            "low": (close - 0.9).astype("float64"),
+            "close": close.astype("float64"),
+            "volume": np.linspace(1_000_000.0, 2_500_000.0, periods).astype("float64"),
+            "returns": returns.astype("float64"),
+            "realized_vol_5d": realized_vol_5d.astype("float64"),
+        },
+        index=index,
+    )
+
+
+class _DummyRun:
+    def __init__(self) -> None:
+        self.summary: dict[str, float | str] = {}
+        self.logged: list[dict[str, object]] = []
+        self.finished = False
+
+    def log(self, payload: dict[str, object]) -> None:
+        self.logged.append(payload)
+
+    def finish(self) -> None:
+        self.finished = True
 
 
 def test_fit_predict_is_deterministic_for_fixed_seed() -> None:
@@ -171,3 +208,53 @@ def test_canonical_lightgbm_price_walkforward_matches_har_reference() -> None:
     )
 
     assert result["overall"]["mae"] <= HAR_REFERENCE_MAE + 1e-6
+
+
+def test_main_price_plus_finbert_runs_side_by_side(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    captured_feature_cols: list[tuple[str, ...]] = []
+    dummy_run = _DummyRun()
+
+    def fake_attach_finbert(df: pd.DataFrame) -> pd.DataFrame:
+        out = df.copy()
+        for idx, column in enumerate(run_lightgbm.FINBERT_FEATURE_COLUMNS, start=1):
+            out[column] = np.linspace(0.01 * idx, 0.02 * idx, len(out), dtype=np.float64)
+        return out
+
+    def fake_fit_predict(
+        *,
+        train_df: pd.DataFrame,
+        test_df: pd.DataFrame,
+        target_col: str,
+        feature_cols: list[str],
+        seed: int,
+    ) -> np.ndarray:
+        del train_df, seed
+        captured_feature_cols.append(tuple(feature_cols))
+        return test_df[target_col].to_numpy(dtype=np.float64, copy=True) + 0.001
+
+    monkeypatch.setattr(run_lightgbm, "load_prices", lambda: _synthetic_loaded_prices())
+    monkeypatch.setattr(run_lightgbm, "attach_finbert", fake_attach_finbert)
+    monkeypatch.setattr(run_lightgbm, "fit_predict", fake_fit_predict)
+    monkeypatch.setattr(run_lightgbm, "_git_commit", lambda: "testsha")
+    monkeypatch.setattr(run_lightgbm, "_init_wandb", lambda config: (dummy_run, "disabled"))
+    monkeypatch.setattr(run_lightgbm.wandb, "Table", lambda dataframe: dataframe)
+
+    exit_code = run_lightgbm.main(["--features", "price+finbert"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert tuple(PRICE_ONLY_FEATURE_COLUMNS) in captured_feature_cols
+    assert tuple(PRICE_FINBERT_FEATURE_COLUMNS) in captured_feature_cols
+    assert set(captured_feature_cols) == {
+        tuple(PRICE_ONLY_FEATURE_COLUMNS),
+        tuple(PRICE_FINBERT_FEATURE_COLUMNS),
+    }
+    assert "mae_price=" in captured.out
+    assert "mae_price_finbert=" in captured.out
+    assert "delta_abs=" in captured.out
+    assert "delta_rel=" in captured.out
+    assert dummy_run.summary["comparison/mae_price"] == pytest.approx(0.001)
+    assert dummy_run.summary["comparison/mae_price_finbert"] == pytest.approx(0.001)
+    assert dummy_run.summary["comparison/mae_delta_abs"] == 0.0
+    assert dummy_run.summary["comparison/mae_delta_rel"] == 0.0
+    assert dummy_run.finished is True

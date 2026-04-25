@@ -60,3 +60,7 @@ Next: T2 — FinBERT join into the feature frame with strict-past, days-since-la
 ## Day 6 (2026-04-24, 0.4h)
 Done: added strict-past FinBERT join features in `src/features/llm_features.py` with isolated synthetic tests in `tests/test_llm_features.py`; `uv run pytest -q tests/test_llm_features.py`, `uv run pytest -q`, and `uv run ruff check .` all passed. Branch: `feat/llm-features-finbert-join`. W&B: N/A.
 Next: wire the FinBERT feature frame into the LightGBM `price+finbert` path and measure the MAE delta versus the price-only baseline. Branch: `feat/llm-features-finbert-join`.
+
+## Day 6 (2026-04-24, 0.6h)
+Done: implemented the `scripts/run_lightgbm.py --features price+finbert` side-by-side ablation, fixed `attach_finbert(...)` to preserve engineered price columns, added smoke/regression coverage, and verified `uv run pytest -q`, `uv run ruff check .`, and the real CLI run; price-only MAE was 0.016618 vs price+FinBERT MAE 0.016983 (`delta_rel=+0.021970`, so FinBERT did not improve this ablation). Branch: `feat/llm-features-finbert-join`. W&B: `fsj6th7j`.
+Next: proceed to the news-feature path and final ablation table, carrying forward the honest negative FinBERT result as the current benchmark comparison. Branch: `feat/llm-features-finbert-join`.

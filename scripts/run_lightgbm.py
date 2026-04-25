@@ -15,6 +15,7 @@ from dotenv import load_dotenv
 
 from src.data.loader import load_prices
 from src.eval.walkforward import walk_forward
+from src.features.llm_features import FINBERT_FEATURE_COLUMNS, attach_finbert
 from src.features.price_features import PRICE_FEATURE_COLUMNS, make_price_features
 from src.models.lightgbm_model import fit_predict
 
@@ -27,14 +28,27 @@ HAR_REFERENCE_MAE = 0.017170
 WANDB_PROJECT = "otpp-nvda"
 SEED = 0
 PRICE_ONLY_FEATURE_COLUMNS = ["realized_vol_5d", *PRICE_FEATURE_COLUMNS]
+PRICE_FINBERT_FEATURE_COLUMNS = [*PRICE_ONLY_FEATURE_COLUMNS, *FINBERT_FEATURE_COLUMNS]
+
+
+def _build_price_feature_frame() -> pd.DataFrame:
+    loaded_prices = load_prices()
+    return make_price_features(loaded_prices)
+
+
+def _with_target(feature_df: pd.DataFrame) -> pd.DataFrame:
+    return feature_df.assign(
+        target_rv5=feature_df["realized_vol_5d"].shift(-TARGET_HORIZON_DAYS)
+    )
 
 
 def _build_dataset() -> pd.DataFrame:
-    loaded_prices = load_prices()
-    featured_prices = make_price_features(loaded_prices)
-    return featured_prices.assign(
-        target_rv5=featured_prices["realized_vol_5d"].shift(-TARGET_HORIZON_DAYS)
-    )
+    return _with_target(_build_price_feature_frame())
+
+
+def _build_finbert_dataset() -> pd.DataFrame:
+    featured_prices = _build_price_feature_frame()
+    return _with_target(attach_finbert(featured_prices))
 
 
 def _git_commit() -> str:
@@ -142,7 +156,11 @@ def _print_table(title: str, rows: list[dict[str, Any]]) -> None:
     print(table.to_string(index=False, float_format=lambda value: f"{value:.6f}"))
 
 
-def _log_results(run: wandb.sdk.wandb_run.Run, results: dict[str, dict[str, Any]]) -> None:
+def _log_results(
+    run: wandb.sdk.wandb_run.Run,
+    results: dict[str, dict[str, Any]],
+    comparison_summary: dict[str, float] | None = None,
+) -> None:
     fold_rows = _fold_summary_rows(results)
     if fold_rows:
         run.log({"lightgbm/folds": wandb.Table(dataframe=pd.DataFrame(fold_rows))})
@@ -159,6 +177,11 @@ def _log_results(run: wandb.sdk.wandb_run.Run, results: dict[str, dict[str, Any]
             run.summary[f"{model_name}/fold_{fold_number}_qlike"] = float(
                 fold_result["qlike"]
             )
+
+    if comparison_summary:
+        run.log(comparison_summary)
+        for key, value in comparison_summary.items():
+            run.summary[key] = float(value)
 
 
 def _lightgbm_fit_fn(
@@ -193,18 +216,53 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _run_walkforward(
+    *,
+    dataset: pd.DataFrame,
+    model_name: str,
+    feature_cols: list[str],
+) -> dict[str, dict[str, Any]]:
+    return {
+        model_name: walk_forward(
+            dataset,
+            fit_fn=_lightgbm_fit_fn(
+                target_col=TARGET_COL,
+                feature_cols=feature_cols,
+                seed=SEED,
+            ),
+            target_col=TARGET_COL,
+            n_folds=N_FOLDS,
+            test_fraction=TEST_FRACTION,
+        )
+    }
+
+
+def _comparison_summary(
+    *,
+    mae_price: float,
+    mae_price_finbert: float,
+) -> dict[str, float]:
+    delta_abs = mae_price_finbert - mae_price
+    delta_rel = delta_abs / mae_price if mae_price != 0.0 else float("nan")
+    return {
+        "comparison/mae_price": mae_price,
+        "comparison/mae_price_finbert": mae_price_finbert,
+        "comparison/mae_delta_abs": delta_abs,
+        "comparison/mae_delta_rel": delta_rel,
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
 
     try:
-        if args.features != "price":
+        if args.features not in {"price", "price+finbert"}:
             raise NotImplementedError("wired up in T+5/T+6")
     except NotImplementedError as exc:
         print(str(exc), file=sys.stderr)
         return 0
 
     dataset = _build_dataset()
-    model_name = f"lightgbm_{args.features.replace('+', '_')}"
     config = {
         "target_col": TARGET_COL,
         "target_horizon_days": TARGET_HORIZON_DAYS,
@@ -212,32 +270,54 @@ def main(argv: list[str] | None = None) -> int:
         "test_fraction": TEST_FRACTION,
         "seed": SEED,
         "features": args.features,
-        "feature_cols": PRICE_ONLY_FEATURE_COLUMNS,
         "git_commit": _git_commit(),
         "data_path": str(Path("data/raw/nvda_prices.parquet")),
         "data_version_start": dataset.index.min().date().isoformat(),
         "data_version_end": dataset.index.max().date().isoformat(),
         "n_rows": int(len(dataset)),
     }
+    if args.features == "price":
+        config["feature_cols"] = PRICE_ONLY_FEATURE_COLUMNS
+    else:
+        config["price_feature_cols"] = PRICE_ONLY_FEATURE_COLUMNS
+        config["price_finbert_feature_cols"] = PRICE_FINBERT_FEATURE_COLUMNS
 
     run, wandb_mode = _init_wandb(config)
     run.summary["wandb_mode"] = wandb_mode
 
     try:
-        results = {
-            model_name: walk_forward(
-                dataset,
-                fit_fn=_lightgbm_fit_fn(
-                    target_col=TARGET_COL,
-                    feature_cols=PRICE_ONLY_FEATURE_COLUMNS,
-                    seed=SEED,
-                ),
-                target_col=TARGET_COL,
-                n_folds=N_FOLDS,
-                test_fraction=TEST_FRACTION,
+        comparison_summary: dict[str, float] | None = None
+        if args.features == "price":
+            model_name = "lightgbm_price"
+            results = _run_walkforward(
+                dataset=dataset,
+                model_name=model_name,
+                feature_cols=PRICE_ONLY_FEATURE_COLUMNS,
             )
-        }
-        _log_results(run, results)
+        else:
+            finbert_dataset = _build_finbert_dataset()
+            results = {}
+            results.update(
+                _run_walkforward(
+                    dataset=dataset,
+                    model_name="lightgbm_price",
+                    feature_cols=PRICE_ONLY_FEATURE_COLUMNS,
+                )
+            )
+            results.update(
+                _run_walkforward(
+                    dataset=finbert_dataset,
+                    model_name="lightgbm_price_finbert",
+                    feature_cols=PRICE_FINBERT_FEATURE_COLUMNS,
+                )
+            )
+            comparison_summary = _comparison_summary(
+                mae_price=float(results["lightgbm_price"]["overall"]["mae"]),
+                mae_price_finbert=float(
+                    results["lightgbm_price_finbert"]["overall"]["mae"]
+                ),
+            )
+        _log_results(run, results, comparison_summary=comparison_summary)
     finally:
         run.finish()
 
@@ -245,13 +325,23 @@ def main(argv: list[str] | None = None) -> int:
     _print_table("Overall metrics (walk-forward T+5 target)", _overall_summary_rows(results))
     _print_table("Fold metrics (walk-forward T+5 target)", _fold_summary_rows(results))
 
-    actual_mae = float(results[model_name]["overall"]["mae"])
-    print(
-        "HAR-RV comparison: "
-        f"HAR-RV reference={HAR_REFERENCE_MAE:.6f} "
-        f"actual={actual_mae:.6f} "
-        f"delta={actual_mae - HAR_REFERENCE_MAE:+.6f}"
-    )
+    if args.features == "price":
+        actual_mae = float(results["lightgbm_price"]["overall"]["mae"])
+        print(
+            "HAR-RV comparison: "
+            f"HAR-RV reference={HAR_REFERENCE_MAE:.6f} "
+            f"actual={actual_mae:.6f} "
+            f"delta={actual_mae - HAR_REFERENCE_MAE:+.6f}"
+        )
+    else:
+        assert comparison_summary is not None
+        print(
+            "Price+FinBERT comparison: "
+            f"mae_price={comparison_summary['comparison/mae_price']:.6f} "
+            f"mae_price_finbert={comparison_summary['comparison/mae_price_finbert']:.6f} "
+            f"delta_abs={comparison_summary['comparison/mae_delta_abs']:+.6f} "
+            f"delta_rel={comparison_summary['comparison/mae_delta_rel']:+.6f}"
+        )
 
     return 0
 

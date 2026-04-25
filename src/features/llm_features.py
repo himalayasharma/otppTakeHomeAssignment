@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 from pandas.api.types import is_datetime64_ns_dtype, is_float_dtype
 
-from src.data.loader import validate_loaded_price_frame
+from src.data.loader import LOADED_PRICE_COLUMNS, validate_loaded_price_frame
 
 
 DEFAULT_FINBERT_SCORES_PATH = Path("data/processed/finbert_scores.parquet")
@@ -64,8 +64,24 @@ def _validate_scores_frame(scores_df: pd.DataFrame) -> pd.DataFrame:
     return scores_df
 
 
+def _validate_price_frame_for_join(price_df: pd.DataFrame) -> pd.DataFrame:
+    missing_columns = [
+        column for column in LOADED_PRICE_COLUMNS if column not in price_df.columns
+    ]
+    if missing_columns:
+        raise ValueError(
+            "Price frame for FinBERT join is missing required columns "
+            f"{missing_columns!r}."
+        )
+
+    validated_base = validate_loaded_price_frame(price_df.loc[:, LOADED_PRICE_COLUMNS])
+    validated = price_df.copy()
+    validated.loc[:, LOADED_PRICE_COLUMNS] = validated_base
+    return validated
+
+
 def _join_finbert(price_df: pd.DataFrame, scores_df: pd.DataFrame) -> pd.DataFrame:
-    validated = validate_loaded_price_frame(price_df)
+    validated = _validate_price_frame_for_join(price_df)
     price = validated.reset_index().sort_values("date").reset_index(drop=True)
     scores = _validate_scores_frame(scores_df.copy()).sort_values("call_date").reset_index(
         drop=True
