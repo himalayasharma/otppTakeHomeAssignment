@@ -1,736 +1,333 @@
-# OTPP Take-Home: NVIDIA AI-Driven Analysis — Execution Plan
+# OTPP NVDA — Execution Plan (rev. 2026-04-24)
 
-> **Owner:** you • **Deadline:** Sun 26 Apr 2026, end of day • **Budget:** 20–25 hrs • **Today:** Sun 19 Apr
+> **Deadline:** Sun 2026-04-26 EOD • **Remaining budget:** ≈15–16h • **Source of truth:** [`SPEC.md`](../SPEC.md)
 >
-> **Goal of this doc:** tell you exactly what to do each evening so you never stare at a blank editor. Follow it linearly.
-
----
-
-## 0. The Thesis (memorize this — it's your north star)
-
-> *Can we extract quantifiable signals from NVIDIA's qualitative disclosures (earnings calls, news, 10-K) that meaningfully improve short-horizon volatility and return-direction forecasts? And what are the honest limits?*
-
-**Why this framing wins:**
-
-- OTPP is a $250B+ pension fund. They hate cowboys. "I predicted NVDA with 95% accuracy" = instant red flag. "I built a rigorous pipeline, quantified what LLM features add, and here's exactly why more isn't possible" = green flag.
-- Directly echoes the JD: *"GenAI applications"*, *"Agentic experience"*, *"investment decisions"*, *"risk management"*.
-- Makes a clear story for the 20-min presentation.
-
-**What you are NOT doing:** beating the market, claiming alpha, making price-level predictions. You are building a *research tool* and honestly evaluating it.
-
----
-
-## 1. Playbook Strategy (read once, then stop worrying about it)
-
-You're new to the agentic playbook AND you have 25 hours. Here's what we keep, skip, and why.
-
-### Keep (non-negotiable)
-
-1. **`AGENTS.md` with hard rules** — 20 min setup, prevents 10+ hrs of agent drift.
-2. **`SPEC.md` with a stopping rule + budget** — keeps you from rabbit-holing.
-3. **`EDA_FINDINGS.md` before you model** — mandatory. Look before you leap.
-4. **Baselines logged to W&B before the fancy model** — trivial (persistence) + simple (HAR-RV / logistic reg).
-5. **Walk-forward split** (NEVER random) and a leakage test.
-6. **Seeds set + git commit logged + data version logged** on every W&B run.
-7. **Plan mode (Opus) at the start of each new chunk** — 20 min of planning saves 2 hrs of fixing.
-
-### Skip (for this project)
-
-- Worktrees — you're solo, one task at a time. A single branch per day is fine.
-- Pre-commit hooks, full CI pipeline — overkill for a take-home.
-- Cross-model review on every commit — only do it on Tier-1 code (data split, eval metric, leakage tests).
-- Model registry gate, canary deploy, monitoring — you're not deploying.
-- Full Pandera schemas everywhere — light schemas on the two main dataframes is enough.
-
-### Mental model for your 7 evenings
-
-| Loop | Cadence | Who |
-|---|---|---|
-| **Strategy** (what to build, what to cut) | Daily 10-min check-in with yourself | You |
-| **Plan** (next 2-hr block) | Opus in plan mode, 20 min | You + Claude Opus |
-| **Implement** (code tasks) | Claude Sonnet, 30–50 min each | Claude does it, you review |
-| **Verify** (is this good enough to commit?) | Per task | You + tests |
-
-Rule: **if you find yourself hand-writing code for more than 15 min, stop.** Either the plan was wrong or the task wasn't agent-ready. Go back to plan mode.
-
----
-
-## 2. Project Scope (what you're actually building)
-
-### Data
-- **Prices/volume:** yfinance, NVDA daily OHLCV, 2021-04-19 → 2026-04-18 (5 yrs)
-- **Earnings call transcripts:** 6 most recent quarters from Motley Fool / Seeking Alpha / IR page (manual scrape, ~6 text files)
-- **SEC filings:** latest 10-K + last 2 10-Qs from EDGAR (free)
-- **News headlines:** NewsAPI free tier (last 30 days detailed) + Finnhub/FMP free tier for older headlines
-
-### AI / ML components
-
-**A. LLM-extracted signals (the "GenAI" leg)**
-- Sentiment on each earnings call (FinBERT baseline + Claude-based structured scoring)
-- Topic/theme extraction across calls (what does management talk about more over time? datacenter, gaming, China, supply constraints?)
-- Risk-factor extraction from 10-K
-
-**B. Agentic research assistant (the "Agentic" leg)**
-- Small Claude agent with tools: `get_price(date_range)`, `get_news(date)`, `get_10k_section(topic)`
-- Given a date, produces a structured JSON brief: sentiment, key events, risk flags
-- This is your "wow" demo — ~3 hrs of work for huge interview impact
-
-**C. Forecasting (the "classical rigor" leg)**
-- **Primary target:** T+5 realized volatility (regression) — tractable, autocorrelated, capital-markets relevant
-- **Secondary target:** T+1 return direction (binary) — harder but interesting
-- **Features:**
-  - Price-based: lagged returns (1, 5, 21d), realized vol (5, 21d), RSI, volume z-score
-  - LLM-derived: earnings call sentiment score, topic weights, rolling news sentiment
-  - Event features: days since last earnings call, earnings surprise sign
-- **Models:** persistence baseline → HAR-RV → LightGBM (with and without LLM features — this A/B is the money slide)
-- **Split:** walk-forward expanding window, 5 folds
-- **Metric:** MAE & QLIKE for vol; directional accuracy + AUC for returns; plus feature importance
-
-### Deliverable
-- GitHub repo (public) with README, code, notebook, `SPEC.md`, `EDA_FINDINGS.md`
-- Slide deck (12–14 slides, PDF)
-- Optional: one recorded 90-sec demo of the agentic assistant
-
----
-
-## 3. The Stopping Rule (save this in `SPEC.md`)
-
-```
-## Stopping rule
-- Primary target: T+5 realized vol MAE on walk-forward test
-  - Persistence baseline target: ~X (to be measured Day 2)
-  - "Worth showing" threshold: LightGBM + LLM features beats persistence by ≥ 5% MAE reduction
-  - "Victory" threshold: LLM features add ≥ 2% MAE reduction vs. LightGBM with price features only
-- Hard time budget: 25 hours total
-- Hard compute budget: $0 (everything runs on your local GPU or CPU)
-- Decision if not hit: SHIP IT ANYWAY with a clear limitations slide. "LLM features did not add signal on this horizon" is a respectable, publishable finding for a take-home.
-```
-
-**This is the single most important paragraph in the whole plan.** If you miss the victory threshold, you do not extend the project — you write an honest slide about why and ship. OTPP wants people who can scope, not people who chase ghosts.
-
----
-
-## 4. Day-by-Day Plan
-
-Total: 23 hrs of work + 2 hrs buffer = 25 hrs.
-
-Each day has a **goal**, **time**, **tasks**, and **"done when"** criteria.
-
----
-
-### 📅 Day 1 — Sunday 19 Apr (tonight) · 3 hrs · BOOTSTRAP + EDA
-
-**Goal:** project scaffolded, EDA done, `SPEC.md` written.
-
-**Tasks:**
-
-**1.1 (20 min) Create repo + scaffold**
-
-```bash
-mkdir otpp-nvda && cd otpp-nvda
-git init
-curl -LsSf https://astral.sh/uv/install.sh | sh  # if uv not installed
-echo "3.11" > .python-version
-uv init --lib
-uv venv && source .venv/bin/activate
-
-# Core deps
-uv add pandas numpy scikit-learn lightgbm statsmodels yfinance \
-       matplotlib seaborn plotly wandb python-dotenv \
-       transformers torch sentence-transformers \
-       anthropic jupyter pandera
-uv add --dev pytest ruff
-
-mkdir -p src/{data,features,models,llm,agent} tests notebooks scripts data/raw analysis
-touch src/__init__.py
-```
-
-Add to `.gitignore`:
-```
-.venv/
-.env
-data/raw/
-data/processed/
-wandb/
-__pycache__/
-*.pyc
-.ipynb_checkpoints/
-.DS_Store
-notebooks/**/outputs/
-```
-
-**1.2 (15 min) Write `AGENTS.md`** — copy-paste this as your starting point:
-
-```markdown
-# AGENTS.md
-
-## Project
-OTPP take-home: NVIDIA AI-driven analysis. Python 3.11, pandas/sklearn/lightgbm/transformers/anthropic.
-Install: `uv sync`
-Run tests: `pytest -q`
-Lint: `ruff check .`
-
-## Hard rules — NEVER violate
-- NEVER modify files in data/raw/
-- NEVER use a random train/test split on time-series data — always walk-forward
-- NEVER fit any preprocessor or target encoder before splitting
-- NEVER leak future information into features (no post_*, future_*, days_until_*)
-- NEVER weaken a test to make it pass — fix the code
-- NEVER commit API keys — .env is gitignored, .env.example is the template
-- NEVER claim a model "predicts NVDA" — frame everything as "adds X% vol reduction vs baseline"
-
-## Stopping rule
-See SPEC.md. Do not propose new experiments past 25 total hours.
-
-## When stuck
-Write your question to .agents/open-questions.md with the 2–3 options you considered. Do not guess.
-
-## Experiment tracking
-- W&B project: otpp-nvda
-- Run name: {target}-{model}-{YYYY-MM-DD-HHMM}
-- Always log: git commit, data version, full config, seed
-
-## When done with a task
-1. Run `pytest -q` — must pass
-2. Commit: `<type>(<scope>): <desc>`  e.g. `feat(features): add HAR-RV features`
-3. Update notes/progress.md one-liner
-```
-
-```bash
-mkdir -p .agents notes
-touch notes/progress.md .agents/open-questions.md
-git add -A && git commit -m "chore: scaffold"
-```
-
-**1.3 (15 min) Create `.env` for API keys**
-
-```bash
-cat > .env.example <<EOF
-ANTHROPIC_API_KEY=
-WANDB_API_KEY=
-NEWSAPI_KEY=
-FMP_KEY=
-EOF
-cp .env.example .env
-# Fill in .env with your real keys
-```
-
-Get these now if you don't have them:
-- Anthropic API key — `console.anthropic.com` (small budget, $10 is plenty)
-- NewsAPI — free tier at `newsapi.org`
-- Financial Modeling Prep — free tier at `financialmodelingprep.com` (gets you earnings surprise data)
-
-**1.4 (90 min) EDA notebook**
-
-Open Claude Code in this directory:
-```bash
-claude
-```
-
-Paste this prompt (non-plan mode, just let it rip — this is research mode):
-
-> I'm doing a take-home for OTPP. Build me an EDA notebook at `notebooks/01_eda.ipynb` that:
+> This file is the operational plan for the remaining work. Each task below is a **drop-in prompt for Claude Code**. The intended workflow is:
 >
-> 1. Pulls NVDA daily OHLCV from yfinance from 2021-04-19 to 2026-04-18
-> 2. Computes daily returns, 5-day realized volatility (sqrt of sum of squared returns over 5 days), log volume
-> 3. Plots: price over time with earnings call dates marked, return distribution, rolling 21-day vol, autocorrelation of returns and of vol
-> 4. Prints: n rows, date range, any missing days, return summary stats, vol summary stats
-> 5. Writes a 1-page `EDA_FINDINGS.md` summarizing: key data facts, distributional properties, suspected regime changes, baseline expectations for a persistence vol model (what MAE should a dumb model get?), and 3–5 open questions for modeling.
+> 1. `/clear` a Claude Code session.
+> 2. Paste the prompt verbatim.
+> 3. Claude Code enters plan mode and produces an implementation plan.
+> 4. You approve the plan.
+> 5. Claude Code dispatches the implementation to **Codex** via the `codex:rescue` subagent.
+> 6. Claude Code verifies (`pytest -q`, `ruff check .`), commits, pushes, opens the PR, and merges per `AGENTS.md` hygiene.
 >
-> Important: do NOT random-split anything. This is time-series data. Only descriptive stats in this notebook.
-
-Review the output. Read `EDA_FINDINGS.md` yourself end-to-end. If it's shallow ("some patterns exist"), reject and ask for specifics ("quantify return skewness, quantify vol autocorrelation at lag 1 and 5, identify the COVID shock period explicitly").
-
-**1.5 (20 min) Write `SPEC.md`** (you write this, not the agent — it's Tier 1)
-
-Template to fill in:
-```markdown
-# SPEC.md — OTPP NVDA take-home
-
-## Problem
-Forecast NVDA T+5 realized volatility. Evaluate whether LLM-extracted signals from earnings calls and news add incremental predictive power over price-only features.
-
-## Success metric
-Primary: MAE of predicted 5-day realized vol on walk-forward held-out test.
-Secondary: Directional accuracy of T+1 return sign.
-
-## Stopping rule
-- Target: LightGBM + LLM features beats persistence baseline by ≥5% MAE reduction
-- "LLM adds value" threshold: ≥2% MAE reduction vs LightGBM price-only
-- Time budget: 25 hrs
-- If not hit: ship with honest limitations slide.
-
-## Data
-- Prices: yfinance NVDA 2021-04-19 to 2026-04-18
-- Earnings calls: 6 quarters, manually collected to data/raw/transcripts/
-- News: NewsAPI free tier (last 30 days full), FMP for longer headline history
-- 10-K / 10-Q: EDGAR
-
-## Split
-Walk-forward expanding window, 5 folds. Test set is the last ~10 months.
-
-## Out of scope
-Intraday data. Options data. Market regime modeling. Macroeconomic variables. Multi-asset.
-```
-
-**1.6 (10 min) Commit + note progress**
-
-```bash
-git add -A && git commit -m "docs: EDA findings, SPEC, AGENTS"
-git push  # if you have a remote set up (create a private GitHub repo now and push)
-```
-
-Append to `notes/progress.md`:
-```
-## Day 1 (2026-04-19, 3h)
-Done: scaffold, EDA, SPEC, AGENTS. Baseline vol MAE from persistence: ~X.
-Next: data collection for transcripts + news + 10-K (Day 2).
-```
-
-**✅ Done-when:**
-- `EDA_FINDINGS.md` has a number for persistence-baseline vol MAE.
-- `SPEC.md` has a stopping rule with specific numbers.
-- Repo pushed to GitHub.
-- You know, in one sentence, what you're building.
+> Don't hand-edit code between steps. If a prompt is ambiguous on first pass, fix the prompt here, not the diff.
 
 ---
 
-### 📅 Day 2 — Monday 20 Apr · 3 hrs · DATA + BASELINES
+## Done (synced from `SPEC.md`)
 
-**Goal:** all raw data collected, baselines logged to W&B, feature pipeline started.
-
-**2.1 (45 min) Collect the non-price data (do this MANUALLY — faster than agent scraping)**
-
-- **Earnings transcripts:** Go to Motley Fool or Seeking Alpha free transcripts. Download 6 quarters for NVDA (FY24 Q1 through FY26 Q1 or whatever's latest). Save as `data/raw/transcripts/YYYY-QN.txt`. Strip obvious ads/boilerplate.
-- **10-K:** From EDGAR, latest NVDA 10-K. Save as `data/raw/filings/10K_2024.txt` (copy-paste the Risk Factors and MD&A sections — don't need the whole doc).
-- **News:** Use NewsAPI to pull ~500 NVDA headlines from the last 30 days. Save as `data/raw/news/newsapi_2026_04.json`. Use FMP `/stock_news?tickers=NVDA&limit=500` for a longer history.
-
-Don't outsource this to an agent — it's faster to do manually and you'll know your data.
-
-**2.2 (20 min) Plan-mode session for baselines + features**
-
-Start Claude with Opus if you have it, else Sonnet. Enter plan mode (Shift+Tab in Claude Code).
-
-> I have NVDA daily OHLCV in `data/raw/nvda_prices.parquet` (already pulled during EDA). I want to build, in this order:
->
-> 1. `src/data/loader.py`: pure function `load_prices() -> pd.DataFrame` that reads the parquet and validates it with a light Pandera schema (cols: date, open, high, low, close, volume, returns, realized_vol_5d).
-> 2. `src/features/price_features.py`: function `make_price_features(df) -> pd.DataFrame` that adds lagged returns (1, 5, 21), lagged vol (5, 21), RSI(14), volume z-score(21). **All lagged, no lookahead.**
-> 3. `src/models/baselines.py`: two functions — `persistence_vol(df)` (predicts t+5 vol = today's realized vol) and `har_rv(df)` (Corsi's HAR-RV model using daily, weekly, monthly vol).
-> 4. `src/eval/walkforward.py`: a walk-forward evaluator that takes a model-fit function, splits into 5 expanding windows, returns per-fold and overall MAE and QLIKE.
-> 5. `scripts/run_baselines.py`: orchestrates all the above, logs to W&B with job_type=baseline, tag=baseline.
-> 6. `tests/test_leakage.py`: two tests — (a) every feature value at time t uses only data from time < t, (b) feature pipeline fit only ever sees training slice.
->
-> Before writing code, produce a TASK_GRAPH with 6 agent-ready tasks each with: file, function signature, inputs, outputs, tests, estimated time. I will review the graph before you code.
-
-Review the task graph. Push back if any task is >45 min or has fuzzy acceptance criteria.
-
-**2.3 (90 min) Execute tasks 1–6 with Claude Sonnet**
-
-For each task, start a fresh session (type `/clear`) and paste the one task spec from the graph. Let it write tests first, then implementation. Run `pytest -q` after each.
-
-**Cross-model check for Tier-1 code:** After `walkforward.py` and `test_leakage.py` are done, run:
-```bash
-git diff HEAD~3 -- src/eval/ tests/ > /tmp/review.patch
-```
-Then ask a second Claude session (fresh, no context) to review the diff specifically for leakage bugs. (Or paste into claude.ai.) This 10 min will save you from an embarrassing interview moment.
-
-**2.4 (25 min) Run baselines, commit W&B run IDs to notes**
-
-```bash
-python scripts/run_baselines.py
-```
-
-Record in `notes/progress.md`:
-```
-Persistence MAE (vol): 0.XX  (W&B run: ...)
-HAR-RV MAE (vol):      0.XX  (W&B run: ...)
-```
-
-These are your floor. Everything you do for the rest of the week is judged against these numbers.
-
-**✅ Done-when:**
-- Baselines logged to W&B.
-- `pytest -q` passes including leakage tests.
-- You have two baseline MAE numbers in your notes.
+- Repo scaffold, EDA, AGENTS.md, cross-session handoff (`notes/progress.md`, `.agents/open-questions.md`).
+- Raw data: `data/raw/nvda_prices.parquet`, 6 transcripts, NewsAPI 98-record corpus, 10-K extracts.
+- Code:
+  - `src/data/loader.py` — Pandera-validated price loader.
+  - `src/features/price_features.py` — leak-safe price features.
+  - `src/models/baselines.py` — persistence + HAR-RV.
+  - `src/eval/walkforward.py` — 5-fold expanding walk-forward, MAE/QLIKE.
+  - `scripts/run_baselines.py` — reproducible runner with W&B offline fallback and persistence guardrail.
+  - `src/llm/finbert.py` + `scripts/build_finbert_scores.py` + `data/processed/finbert_scores.parquet`.
+- Tests green; dedicated leakage regression coverage.
 
 ---
 
-### 📅 Day 3 — Tuesday 21 Apr · 3 hrs · LLM SIGNALS
+## How to use these prompts
 
-**Goal:** earnings-call sentiment + topic features extracted, saved to `data/processed/llm_features.parquet`.
-
-**3.1 (30 min) FinBERT sentiment baseline (fast, free, runs on CPU)**
-
-Plan-mode prompt:
-> Build `src/llm/finbert.py` with `score_text(text: str) -> dict` returning `{pos, neg, neu}` using `ProsusAI/finbert`. Apply it to all 6 transcripts in `data/raw/transcripts/` sentence-by-sentence, aggregate per call, save to `data/processed/finbert_scores.parquet` with columns `call_date, pos_mean, neg_mean, neu_mean, pos_frac, neg_frac`. Do not finetune. Handle GPU/CPU automatically.
-
-**3.2 (60 min) Claude-based structured scoring (the more interesting one)**
-
-Plan-mode prompt:
-> Build `src/llm/claude_scorer.py`. For each earnings call, send it (chunked if >150k tokens) to `claude-sonnet-4-5-20250929` with a prompt that extracts a structured JSON: `{overall_sentiment: float [-1,1], confidence_about_next_quarter: float [0,1], key_themes: list[str], risk_flags: list[str], forward_guidance_direction: {raised, maintained, lowered, none}, tone_vs_last_quarter: str}`. Use Anthropic SDK. Save to `data/processed/claude_scores.parquet`. Log API cost.
->
-> Before writing: design the prompt carefully. Include 1 explicit example in the prompt. Validate output JSON with Pydantic.
-
-**This is the slide that demonstrates GenAI fluency** — a FinBERT number alone is 2019. A structured, auditable, schema-validated LLM extraction is 2026.
-
-**3.3 (45 min) Topic modeling across calls**
-
-Use BERTopic or just Claude-clustering:
-> Build `src/llm/topics.py` that takes all 6 transcripts, extracts top 10 themes with weights per quarter, saves to `data/processed/topic_weights.parquet` (rows = call_date, cols = theme, values = weight). Use either BERTopic with all-MiniLM-L6-v2 embeddings, or a simpler Claude-based extraction: for each transcript, ask Claude to score it on a fixed set of 10 themes (datacenter, gaming, automotive, China risk, supply chain, margin, AI demand, competition, regulation, capex). Pick whichever is faster to implement (<45 min).
-
-Pragmatic call: **go with the fixed-theme Claude scoring.** Interpretability > novelty for this project.
-
-**3.4 (30 min) Merge everything into a feature table**
-
-> Build `src/features/llm_features.py`: function `attach_llm_features(price_df) -> pd.DataFrame` that, for each trading day, attaches the most recent earnings call's sentiment + theme weights, plus a "days since call" feature. Save merged output to `data/processed/features_full.parquet`. Add a Pandera schema.
-
-Commit. Push. Note in progress.
-
-**✅ Done-when:**
-- `features_full.parquet` exists with price + FinBERT + Claude + topic features.
-- You can eyeball the Claude sentiment scores and they pass a sniff test (bad quarter = lower score).
+- Each prompt below is **self-contained**. Don't add context — Claude Code can read the repo.
+- Prompts are ordered by execution sequence. Dependencies are noted. Don't skip ahead.
+- Every prompt ends with the same **Handoff** clause: plan first, then dispatch to Codex, then verify and ship the PR. Don't remove that clause.
+- If a step's PR fails CI, fix the prompt's **Acceptance** section before retrying — don't just rerun.
 
 ---
 
-### 📅 Day 4 — Wednesday 22 Apr · 3 hrs · FORECASTING + LLM CONTRIBUTION
+## Prompt 1 — LightGBM price-only walk-forward
 
-**Goal:** LightGBM model trained two ways (price-only vs price+LLM), walk-forward evaluated, feature importance logged. This is the day your core result materializes.
-
-**4.1 (20 min) Plan the modeling runs**
-
-Plan mode:
-> I want three W&B runs tonight, all on the same walk-forward split:
-> 1. `lgbm_price_only` — LightGBM on price-based features only
-> 2. `lgbm_price_plus_llm` — LightGBM on price + LLM features
-> 3. `lgbm_llm_only` — LightGBM on LLM features only (sanity check)
->
-> For each: log fold MAE + QLIKE, aggregate MAE + QLIKE, feature importance (gain), training time. Use the walk-forward evaluator built on Day 2. Target is T+5 realized vol. Hyperparameters: conservative defaults (num_leaves=31, learning_rate=0.05, n_estimators=300, early_stopping_rounds=30 using the last fold of training as validation). Don't tune — reproducibility > tuning for this take-home.
->
-> Also: compute a paired bootstrap test (1000 resamples of fold predictions) for the difference in MAE between run 1 and run 2. Log the p-value and 95% CI.
-
-The bootstrap test is your "I know stats" signal in the presentation.
-
-**4.2 (75 min) Execute**
-
-Sonnet implements. Test. Run. Review the numbers carefully.
-
-**Interpret honestly:**
-- LLM features beat by ≥5%? 🎉 Victory. Lead with it.
-- LLM features beat by 2–5%? ✅ Solid. Lead with the honest contribution.
-- LLM features neutral or worse? ⚠️ **Also fine.** Frame: "LLM features did not add signal on this 5-day horizon with 6 quarters of transcripts — likely too few data points for the signal to dominate noise. On a 20-quarter horizon with 60 transcripts this conclusion may flip. Here's what I'd build next with more data/time."
-
-**This is the moment that separates pretenders from practitioners.** Anyone can paste "our model achieves 0.99 AUC." Only a real data scientist says "the effect was 1.2% with a p-value of 0.18, so I'd collect more data before I deploy."
-
-**4.3 (45 min) Secondary target: direction classification (optional, skip if 4.1–4.2 ran over)**
-
-Same three runs, but target is T+1 return sign, metric is AUC + directional accuracy. This gives you a second chart for the deck.
-
-**4.4 (40 min) Error analysis**
-
-> Build `scripts/error_analysis.py`. For the best LightGBM run, produce:
-> - Scatter: predicted vs actual 5-day vol, colored by fold
-> - Residuals vs time (show where model fails — likely earnings days and macro shocks)
-> - Top 20 worst predictions with date + features + residual → save to `analysis/worst_20.csv`
-> - Feature importance bar chart (top 15) → `analysis/feature_importance.png`
-> - Short `analysis/findings.md`: 3 failure patterns, 3 hypotheses for next iteration.
-
-Read `findings.md` yourself. Do not skim.
-
-**✅ Done-when:**
-- Three modeling runs logged to W&B with clean names.
-- You have a one-sentence answer to: "did LLM features add predictive power, and by how much, with what statistical confidence?"
-- `analysis/feature_importance.png` exists.
-
----
-
-### 📅 Day 5 — Thursday 23 Apr · 3 hrs · AGENTIC ASSISTANT
-
-**Goal:** the "wow" demo. A Claude-powered agent that synthesizes research on NVDA for a given date.
-
-**Why this day matters:** OTPP's JD literally says "Agentic experience" and "GenAI applications." If every other candidate only did sentiment analysis, this is what pulls you ahead.
-
-**5.1 (30 min) Plan the agent**
-
-Plan mode with Opus:
-> I want to build a small Claude-powered research agent. Name: `nvda_analyst`. Scope:
->
-> Input: `analyze(date: str) -> AnalystBrief` where AnalystBrief is a Pydantic model with: `date`, `recent_price_move`, `recent_news_summary`, `sentiment_score`, `key_events: list[Event]`, `risk_flags: list[str]`, `one_paragraph_brief: str`.
->
-> Tools available to the agent (Claude tool-use):
-> 1. `get_price_window(start, end)` → returns recent price/vol summary from our parquet
-> 2. `get_news(date, days_back=7)` → returns NewsAPI headlines from our stored data
-> 3. `get_10k_section(topic)` → retrieves relevant paragraphs from cached 10-K via simple keyword/embedding search
-> 4. `get_latest_earnings_call_summary()` → returns the Claude-extracted summary from Day 3
->
-> Design: single-turn tool use is fine. Loop: model emits tool_use → we execute → feed result → until it emits a text response.
->
-> Deliverables: `src/agent/analyst.py`, `src/agent/tools.py`, `tests/test_agent.py` (mocks the Claude API), `scripts/demo_agent.py` that runs it for three dates and prints the briefs.
->
-> Produce a 5-task TASK_GRAPH before coding.
-
-**5.2 (2 hrs) Implement**
-
-Let Sonnet build it. Watch for these pitfalls:
-- Agent hallucinating tool results → always validate tool outputs before feeding back
-- Tool schemas being too loose → use strict Pydantic
-- The demo silently failing if an API returns empty → explicit error handling
-
-**5.3 (15 min) Record a demo**
-
-Run `scripts/demo_agent.py` on 3 dates: (a) a recent earnings call day, (b) a random uneventful day, (c) a day with a known news event (e.g., an export restriction announcement if one exists in your window). Save the output to `analysis/agent_demo.md`. Screenshot or screen-record for the slide.
-
-**5.4 (15 min) Guardrails note**
-
-In `src/agent/README.md`, write 1 paragraph on: "How I'd productionize this for OTPP" — mention: (1) PII / confidential-info filters, (2) output validation + human-in-the-loop for material decisions, (3) cost monitoring per query, (4) audit log. This is the kind of thing an AI engineer at a pension fund actually cares about, and showing you've thought about it is free interview points.
-
-**✅ Done-when:**
-- Agent produces a coherent brief for 3 dates.
-- Tools are mocked in tests, tests pass.
-- Demo recorded or screenshotted.
-
----
-
-### 📅 Day 6 — Friday 24 Apr · 3 hrs · VISUALIZATIONS + POLISH
-
-**Goal:** all charts production-quality, notebook narrative readable by a non-technical exec.
-
-**6.1 (75 min) Core charts — make them beautiful**
-
-You need these plots, and they need to look good:
-
-1. **NVDA price with earnings call dates** — returns annotated, vol overlay
-2. **Sentiment trajectory across calls** — Claude score vs FinBERT score per quarter (line + bar)
-3. **Topic evolution heatmap** — quarters × themes, color-coded weight
-4. **Walk-forward performance comparison** — bar chart of MAE, three models, with error bars from bootstrap
-5. **Feature importance bar chart** — top 15, LLM features highlighted
-6. **Residuals over time** — shows where the model fails
-7. **Agent demo screenshot** — one of the three briefs, pretty-printed
-
-Use plotly for interactives if presenting laptop→projector; matplotlib with a clean style (seaborn-whitegrid, big fonts) for the deck.
-
-Prompt:
-> Build `notebooks/02_results.ipynb`. It loads all the W&B run summaries + analysis artifacts and produces these 7 charts. Each chart must have: title, axis labels with units, legend, a caption string. Save each as PNG to `analysis/figures/`. Style: professional, matplotlib + seaborn whitegrid, no chartjunk.
-
-Review every chart. If any label is unclear to you, an interviewer will be lost too.
-
-**6.2 (60 min) One final reader-friendly summary notebook**
-
-> Build `notebooks/03_narrative.ipynb`. Audience: OTPP interviewer with business + light technical background. Structure:
-> 1. The question (thesis)
-> 2. The data
-> 3. What we found in the text (LLM signals, with 1–2 real quote snippets from transcripts that moved the score)
-> 4. Does it help forecast? (the bar chart + p-value)
-> 5. Agent demo (linked)
-> 6. Limitations (honest)
-> 7. What next
->
-> Prose between each chart — no code cells visible (use `%%capture` or hide inputs). This is the "if they open the notebook, they get the story" artifact.
-
-**6.3 (45 min) README.md**
-
-```markdown
-# OTPP Take-Home: NVIDIA AI-Driven Analysis
-[Your name] — April 2026
-
-## TL;DR
-[3 sentences: thesis, key result, honest caveat]
-
-## Reproducing
-[uv sync, .env, python scripts/run_baselines.py, etc. — 5 commands]
-
-## Repo structure
-[tree with 1-line annotations]
-
-## Key results
-[Table: model | MAE | p-value vs baseline]
-
-## Limitations
-- Only 6 earnings calls — sample too small for robust causal claims about LLM feature value
-- 5-day vol may be too long a horizon to capture intraday reaction
-- No macro / sector controls
-- Walk-forward test covers a single regime (mostly AI-boom period)
-
-## Next steps
-- 20+ calls back-history
-- Intraday vol target
-- Cross-asset features (SOX, semis ETFs)
-- Live agent with monitoring
-```
-
-**✅ Done-when:**
-- 7 figures exist in `analysis/figures/`.
-- README reads well on GitHub.
-- You're proud of the repo if someone clicks it.
-
----
-
-### 📅 Day 7 — Saturday 25 Apr · 4 hrs · PRESENTATION
-
-**Goal:** 12–14 slides, rehearsed twice, under 20 min.
-
-**7.1 (2 hrs) Slide deck**
-
-Suggested structure for 15–20 min (aim for 13 slides, ~1 min each + Q&A):
-
-| # | Slide | What's on it |
-|---|---|---|
-| 1 | Title | Name, role, company analyzed, date |
-| 2 | **The question** | The thesis, framed as a question a portfolio manager would ask |
-| 3 | Why NVIDIA | 1 sentence business context; why this company tests interesting hypotheses for a fund like OTPP |
-| 4 | Data pipeline | One diagram: sources → processed → features. Quantify (5 yrs prices, 6 calls, 10-K, X headlines) |
-| 5 | LLM signal extraction | Side-by-side: raw transcript snippet → structured JSON output. Mention schema validation. |
-| 6 | Sentiment + theme findings | Sentiment trajectory chart + topic heatmap. One observation per chart. |
-| 7 | 🤖 Agentic assistant demo | Screenshot of one brief + 30-sec video if possible. Emphasize tool use + guardrails. |
-| 8 | Forecasting setup | Walk-forward diagram, target definition, why T+5 vol |
-| 9 | Results | The bar chart. MAE numbers. Bootstrap p-value. |
-| 10 | **Feature importance** | LLM features highlighted. Honest about magnitude. |
-| 11 | Failure modes | Residuals plot. Where does the model break? (earnings days, macro shocks) |
-| 12 | **Limitations (be generous here)** | Sample size, regime, data gaps. This slide wins interviews. |
-| 13 | What I'd build next | 3 concrete items, prioritized. |
-| 14 | (Backup slides) | Full tech stack, deeper charts, agent architecture detail |
-
-**Design rules:**
-- One idea per slide.
-- Large fonts (min 24pt body).
-- Each chart gets its own slide — never two charts fighting.
-- Black/white/one-accent-color palette. No clip art.
-- Slide 12 (limitations) is the one where you win OTPP. Do not rush it.
-
-**7.2 (45 min) Rehearse end-to-end twice**
-
-Time yourself. First pass is always too long. Cut ruthlessly. Your target: 17 min leaving 3+ for Q&A transition.
-
-Record yourself on the phone for the second pass. Watch it. Cringe. Fix.
-
-**7.3 (45 min) Anticipate Q&A**
-
-Write out answers to these (you will get 3 of them):
-1. "Why 5-day vol, not 1-day returns?" → *[Because 5-day vol is more autocorrelated, gives any signal a fair chance to show; 1-day returns are mostly noise. We also ran it as a secondary target — slide X.]*
-2. "Your p-value was 0.18 — isn't that non-significant?" → *[Yes. With only 6 transcripts the effect size would need to be huge to hit 0.05. The point of this exercise was to build the pipeline and honestly quantify. In production with 40+ transcripts I'd expect this to tighten.]*
-3. "How would you productionize the agent?" → *[Section 5.4 of the repo — PII filter, output validation, human-in-the-loop on material decisions, cost monitoring, audit log. I'd also add eval-set regression testing on every prompt change.]*
-4. "What if the forecast went the other way — LLM features hurt performance?" → *[I'd report it. The value here is the pipeline, not the number. LLM features not helping on a 6-quarter sample is a legitimate finding that guides next investments.]*
-5. "How does this apply to OTPP's business?" → *[Private-markets / capital-markets team makes lots of qualitative reads on companies. A pipeline that quantifies tone, themes, and surfaces structured briefs is an analyst productivity tool, not a trading signal generator.]*
-6. "Why LightGBM and not a transformer / neural net?" → *[Tabular + small sample → LightGBM is the strongest baseline by research consensus (Grinsztajn et al. 2022). A transformer on this sample size would overfit.]*
-7. "What data would you add if you had another week?" → *[20-call transcript history; analyst estimate revisions; earnings surprise magnitudes; sector ETF vol to control for market beta; put/call skew.]*
-
-**7.4 (30 min) Final repo polish**
-
-```bash
-ruff format .
-ruff check . --fix
-pytest -q
-# Make sure README is rendered correctly on GitHub
-# Make sure no .env or API keys are committed — git log -p | grep -i "api_key"
-```
-
-**✅ Done-when:**
-- Deck exported to PDF.
-- Rehearsal under 20 min.
-- GitHub repo public, README clean, zero secrets in history.
-
----
-
-### 📅 Day 8 — Sunday 26 Apr · 2 hrs · BUFFER + SUBMIT
-
-**Goal:** submit on time with nothing broken.
-
-- Fresh clone of the repo in a new venv, run `uv sync && python scripts/run_baselines.py` — make sure it works from scratch
-- One more rehearsal of the presentation
-- Write your submission email: 3 short paragraphs — thesis in one sentence, key finding in one sentence, link to repo + PDF deck
-- Submit well before the deadline (never at 11:58pm)
-
----
-
-## 5. The Five Rules You Cannot Break
-
-Print this and tape it above your monitor.
-
-1. **Never random-split time-series data.** Always walk-forward. There is a test for this; do not weaken it.
-2. **Fit preprocessors on train only.** No `StandardScaler().fit(X_all)` anywhere. Ever.
-3. **Baselines before fancy.** No LightGBM numbers get shown without persistence and HAR-RV numbers next to them.
-4. **Log every run to W&B** with seed, commit hash, and data version. Runs that aren't logged don't exist.
-5. **The stopping rule is sacred.** If at hour 20 you have not hit the victory threshold, you do not extend. You write the limitations slide.
-
----
-
-## 6. Agentic Loop Cheat Sheet (for your first time)
-
-Every coding task follows this loop:
+**Branch:** `feat/lightgbm-price-only` • **Depends on:** none • **Est:** 1.5h
 
 ```
- ┌─────────────────────────────────────────────────┐
- │ 1. Plan mode (Opus or Sonnet, Shift+Tab)        │
- │    Describe goal + constraints                  │
- │    Get: task graph with file+function+tests     │
- │    REVIEW the graph manually                    │
- └─────────────────────────────────────────────────┘
-                     │
-                     ▼
- ┌─────────────────────────────────────────────────┐
- │ 2. /clear. Paste ONE task from the graph        │
- │    "Write tests first. Then implementation."    │
- └─────────────────────────────────────────────────┘
-                     │
-                     ▼
- ┌─────────────────────────────────────────────────┐
- │ 3. `pytest -q` — must pass                      │
- │    Grep tests for: skip, mock, assert True      │
- └─────────────────────────────────────────────────┘
-                     │
-                     ▼
- ┌─────────────────────────────────────────────────┐
- │ 4. Review the diff yourself for Tier-1 code     │
- │    (split, leakage, metric). For Tier-2/3,      │
- │    just trust tests.                            │
- └─────────────────────────────────────────────────┘
-                     │
-                     ▼
- ┌─────────────────────────────────────────────────┐
- │ 5. git commit, move to next task                │
- └─────────────────────────────────────────────────┘
+Plan and implement a LightGBM price-only walk-forward run that matches the contract used by the existing baselines.
+
+Goal: produce a LightGBM model wrapper, a runner script, and tests, such that running the script reports a walk-forward MAE that is at most HAR-RV's MAE (0.017170). If it cannot match HAR, stop and report the finding rather than tuning.
+
+Files to create:
+- `src/models/lightgbm_model.py` — exposes `fit_predict(train_df, test_df, target_col, feature_cols, seed) -> np.ndarray` matching the call shape used by `src/eval/walkforward.py`. Use sane defaults: `num_leaves=31, learning_rate=0.05, n_estimators=300, min_data_in_leaf=20, feature_fraction=0.9, bagging_fraction=0.9, bagging_freq=5`. No early stopping (folds are small). Deterministic under seed.
+- `scripts/run_lightgbm.py` — mirrors `scripts/run_baselines.py`: assembles the dataset via `src/data/loader.py` + `src/features/price_features.py`, runs walk-forward eval, logs per-fold and overall MAE/QLIKE to W&B with offline fallback. Add `--features {price,price+finbert,price+news,price+all}` flag (only `price` needs to work in this PR; the others can raise NotImplementedError until Prompt 3/5).
+- `tests/test_lightgbm.py` — covers: (a) deterministic predictions under fixed seed, (b) fit_predict shape matches walk-forward expectations, (c) leakage assertion identical to `tests/test_leakage.py` pattern but for LightGBM, (d) regression test that price-only MAE on the canonical split is ≤ 0.017170.
+
+Reuse (do not reimplement):
+- Walk-forward harness: `src/eval/walkforward.py`.
+- Dataset assembly + W&B offline fallback + dotenv loading: copy the pattern from `scripts/run_baselines.py`.
+- Persistence/HAR contract for `fit_predict`: `src/models/baselines.py`.
+
+Acceptance:
+- `uv run pytest -q` passes (existing 45 + new tests).
+- `uv run ruff check .` passes.
+- `uv run python -m scripts.run_lightgbm --features price` exits 0 and prints overall MAE ≤ 0.017170.
+- New PR diff stays under ~400 lines per AGENTS.md.
+
+Handoff: plan first in plan mode. Once I approve the plan, dispatch implementation to Codex via the `codex:rescue` subagent. Do not implement directly. After Codex returns, run `uv run pytest -q` and `uv run ruff check .`, append a one-line entry to `notes/progress.md`, then commit, push, open PR per AGENTS.md, and squash-merge once green.
 ```
 
-**Tier-1 code** (review line-by-line): `walkforward.py`, `test_leakage.py`, the target definition, the metric computation.
+---
 
-**Tier-2 code** (skim, trust tests): model training, feature engineering, agent tools.
+## Prompt 2 — FinBERT join into feature frame
 
-**Tier-3 code** (skim): plotting, logging, I/O.
+**Branch:** `feat/llm-features-finbert-join` • **Depends on:** Prompt 1 merged • **Est:** 1h
 
-**If you catch yourself re-explaining the project to the agent more than twice in a session, `/clear` and start fresh.** Wasted context = wasted hours.
+```
+Plan and implement a strict-past join of the existing FinBERT call-level scores onto the price feature frame.
+
+Goal: produce `src/features/llm_features.py::attach_finbert(price_df) -> pd.DataFrame` that, for each trading day, attaches the most recent earnings-call FinBERT score and a `days_since_last_call` feature, with no lookahead. Pre-first-call rows must carry NaN sentiment and a sentinel days-since value (not zero).
+
+Files to create:
+- `src/features/llm_features.py` — module with `attach_finbert(df)`. Reads `data/processed/finbert_scores.parquet`, merges `as_of <= trade_date` semantically (use `pd.merge_asof` with `direction="backward"` and `allow_exact_matches=True`). Adds columns: `finbert_pos_mean`, `finbert_neg_mean`, `finbert_neu_mean`, `finbert_pos_frac`, `finbert_neg_frac`, `days_since_last_call`. Pure function; no I/O beyond reading the parquet.
+- `tests/test_llm_features.py` — covers: (a) every joined row's call_date is strictly ≤ trade_date (leakage test), (b) pre-first-call rows have NaN sentiment and `days_since_last_call` is NaN or a documented sentinel, (c) join produces no row duplication, (d) deterministic under fixed input.
+
+Reuse:
+- The FinBERT scores are already strict-past from `src/llm/finbert.py`; do NOT shift them again.
+- Existing leakage-test pattern from `tests/test_leakage.py`.
+
+Acceptance:
+- `uv run pytest -q` and `uv run ruff check .` pass.
+- A new dedicated leakage test asserts `attach_finbert` adds zero future information.
+- No write to `data/processed/` in this PR — pure feature transform only.
+
+Handoff: plan first in plan mode. Once approved, dispatch implementation to Codex via `codex:rescue`. After Codex returns, verify, append `notes/progress.md`, commit, push, open PR, squash-merge once green.
+```
 
 ---
 
-## 7. Red Flags to Watch For
+## Prompt 3 — LightGBM + FinBERT run
 
-| Symptom | What it means | What to do |
-|---|---|---|
-| Test passes suspiciously fast | Agent weakened an assertion | `git diff HEAD~1 -- tests/` and read it |
-| Model MAE is much better than baselines | Data leakage | Stop. Run leakage tests. Check split. |
-| Claude scores are all the same number | Prompt is bad | Rewrite with explicit calibration examples |
-| Agent invents a function that doesn't exist | Context overflowed | `/clear` and restart the session |
-| You're at hour 20 and haven't started slides | Scope creep | Freeze code, open Keynote NOW |
+**Branch:** `feat/lightgbm-finbert-run` • **Depends on:** Prompts 1 + 2 merged • **Est:** 0.5h
+
+```
+Plan and implement the price+finbert LightGBM run. Wire `attach_finbert` into the runner and report the MAE delta vs price-only.
+
+Goal: `python -m scripts.run_lightgbm --features price+finbert` produces a walk-forward MAE that is computed and logged side-by-side with the price-only number.
+
+Files to modify:
+- `scripts/run_lightgbm.py` — implement the `price+finbert` branch: call `attach_finbert` after `make_price_features`, propagate the new columns into `feature_cols`. Keep the price-only branch unchanged. Log both MAE and delta-vs-price-only to W&B and stdout.
+- `tests/test_lightgbm.py` — add a smoke test that the `price+finbert` branch runs on a tiny synthetic frame and emits the expected feature columns into the model.
+
+Reuse:
+- `attach_finbert` from `src/features/llm_features.py` (Prompt 2).
+- All existing W&B / runner plumbing in `scripts/run_lightgbm.py` (Prompt 1).
+
+Acceptance:
+- `uv run pytest -q` and `uv run ruff check .` pass.
+- Running the script with `--features price+finbert` exits 0 and prints both `mae_price` and `mae_price_finbert` plus the absolute and relative delta.
+- No expectation that finbert beats price-only — log honestly either way.
+
+Handoff: plan first; dispatch to Codex via `codex:rescue`; verify; commit; push; open PR; squash-merge.
+```
 
 ---
 
-## 8. Submission Checklist (Sunday afternoon)
+## Prompt 4 — Claude news extraction
 
-- [ ] GitHub repo public + clean README
-- [ ] `EDA_FINDINGS.md`, `SPEC.md`, `analysis/findings.md` all committed
-- [ ] W&B project public (or export run summaries to a CSV in repo)
-- [ ] PDF deck in repo at `presentation/otpp_nvda_deck.pdf`
-- [ ] Agent demo output at `analysis/agent_demo.md`
-- [ ] Repo builds from scratch in a fresh venv
-- [ ] No secrets in git history (`git log -p | grep -iE "key|token|secret"`)
-- [ ] Submission email drafted and scheduled for Saturday night, not Sunday night
+**Branch:** `feat/claude-news-extract` • **Depends on:** none (parallelizable with 1–3) • **Est:** 3.5h
+
+```
+Plan and implement Claude-based structured extraction over the NewsAPI corpus, producing a daily-aggregated parquet ready for downstream join.
+
+Goal: for each article in `data/raw/news/newsapi_2026_04.json`, call Claude Haiku 4.5 (`claude-haiku-4-5-20251001`) with a strict JSON-schema prompt to extract `{sentiment_score: float in [-1,1], risk_score: float in [0,1], topic_tags: list[str] from a fixed set}`. Aggregate to a daily frame and persist.
+
+Files to create:
+- `src/llm/news_extract.py` — exposes `score_article(client, article: dict) -> ArticleScore` (Pydantic model) and `aggregate_daily(scores: list[ArticleScore]) -> pd.DataFrame` returning columns `as_of, news_sent_mean, news_risk_max, news_count, news_topic_<tag>` (one column per topic tag in the fixed set: `["earnings", "guidance", "ai_demand", "datacenter", "china", "supply_chain", "competition", "regulation", "macro", "other"]`). Use Anthropic SDK with prompt caching on the system prompt. Validate JSON output with Pydantic; on parse failure, retry once then drop the article and log it.
+- `scripts/build_news_scores.py` — iterates the NewsAPI JSON (98 records), calls `score_article`, persists raw scores to `data/processed/news_scores_raw.parquet`, runs `aggregate_daily`, persists to `data/processed/news_scores.parquet`. Print total Anthropic cost at the end.
+- `tests/test_news_extract.py` — covers: (a) Pydantic schema rejects out-of-range scores, (b) `aggregate_daily` produces one row per `as_of` with correct topic one-hot aggregation, (c) Anthropic client is mocked end-to-end (no real network call in tests), (d) malformed model output triggers exactly one retry then drops cleanly.
+
+Reuse:
+- The dotenv + ANTHROPIC_API_KEY loading pattern already used elsewhere in the repo (search for `load_dotenv`).
+- Pandera schema pattern from `src/data/loader.py` for the output parquet.
+
+Acceptance:
+- `uv run pytest -q` and `uv run ruff check .` pass.
+- `uv run python -m scripts.build_news_scores` produces both parquets, exits 0, prints cost.
+- Total Anthropic spend ≤ $1 for the 98-record run (sanity-check before wider use).
+- Output parquet has Pandera-validated schema.
+
+Handoff: plan first; dispatch to Codex via `codex:rescue`; verify; commit; push; open PR; squash-merge.
+```
 
 ---
 
-## 9. One Last Thing
+## Prompt 5 — News features into feature frame
 
-The interview is not about the model's MAE. It's about whether you can be trusted with $250B of retirees' money.
+**Branch:** `feat/llm-features-news-join` • **Depends on:** Prompts 2 + 4 merged • **Est:** 1h
 
-Every rigor signal (walk-forward, stopping rule, limitations slide, Pandera schemas, leakage tests, bootstrap CIs, "I don't know, let me check") is worth 10x more than a fancier model.
+```
+Plan and implement the strict-past join of daily news scores onto the price feature frame.
 
-Optimize for trust, not for metrics.
+Goal: extend `src/features/llm_features.py` with `attach_news(price_df) -> pd.DataFrame` that joins `data/processed/news_scores.parquet` onto the price frame using `pd.merge_asof` (`direction="backward"`, `allow_exact_matches=True`) on `as_of <= trade_date`. Days with no news in the lookback window get NaN/zero (document which).
 
-Good luck. 🚀
+Files to modify:
+- `src/features/llm_features.py` — add `attach_news`; add `attach_all(df) -> pd.DataFrame` that composes `attach_finbert` then `attach_news`.
+- `tests/test_llm_features.py` — add: (a) leakage test for `attach_news`, (b) `attach_all` produces a frame with the union of FinBERT and news columns and no row duplication, (c) explicit test that a synthetic future-dated news row is not joined to a past trade date.
+
+Acceptance:
+- `uv run pytest -q` and `uv run ruff check .` pass.
+- New leakage tests run as part of the default pytest collection (no skip markers).
+
+Handoff: plan first; dispatch to Codex via `codex:rescue`; verify; commit; push; open PR; squash-merge.
+```
+
+---
+
+## Prompt 6 — Final ablation
+
+**Branch:** `feat/lightgbm-ablation` • **Depends on:** Prompts 3 + 5 merged • **Est:** 1.5h
+
+```
+Plan and implement the full ablation across {price, price+finbert, price+news, price+all}, but fail fast if any selected feature set is not estimable under the canonical split.
+
+Goal: a single command either:
+- produces `data/processed/ablation_results.csv` and prints a markdown-ready summary table comparing all four feature sets on overall MAE, per-fold MAE, and overall QLIKE, or
+- exits non-zero before W&B/model fitting with a precise trainability diagnostic if any selected feature set has no walk-forward fold with both valid train and valid test rows.
+
+Files to modify / create:
+- `scripts/run_lightgbm.py` — implement the `price+news` and `price+all` branches using `attach_news` / `attach_all` from Prompt 5. Add `--ablation` flag that runs all four variants in one invocation, but validate estimability under the canonical 5-fold expanding split before W&B init or model fitting.
+- `tests/test_lightgbm.py` — add a smoke test that `--ablation` mode runs end-to-end on a tiny synthetic frame and writes the expected CSV with 4 rows, plus regressions for zero-overlap and tail-only-valid/no-trainable-fold failures.
+- `data/processed/ablation_results.csv` — generated artifact, committed (small file, traceability).
+
+Acceptance:
+- `uv run pytest -q` and `uv run ruff check .` pass.
+- `uv run python -m scripts.run_lightgbm --ablation` exits 0 only when every selected feature set is estimable and every reported metric is finite.
+- When a selected feature set is non-estimable, the command exits non-zero, prints the price range, latest target-eligible date, feature-valid range, and per-fold valid train/test counts, and leaves any existing `data/processed/ablation_results.csv` unchanged.
+- For news feature sets, the failure message explicitly states when the current NewsAPI history is too short to support strict-past training under the canonical split.
+
+Handoff: plan first; dispatch to Codex via `codex:rescue`; verify; commit; push; open PR; squash-merge.
+```
+
+---
+
+## Prompt 7 — Secondary metric: T+1 directional accuracy
+
+**Branch:** `feat/walkforward-directional-accuracy` • **Depends on:** none (parallelizable with 1–6) • **Est:** 0.5h
+
+```
+Plan and implement T+1 return-sign directional accuracy as a secondary metric in the walk-forward harness.
+
+Goal: every model run reports both MAE/QLIKE on T+5 vol and a directional-accuracy number on T+1 return sign, computed on the same walk-forward folds.
+
+Files to modify:
+- `src/eval/walkforward.py` — extend the per-fold and aggregate result dicts with `directional_accuracy` (fraction of test-fold rows where `sign(pred_t+1_return) == sign(actual_t+1_return)`). Treat zero-return rows by excluding them from the denominator (document this).
+- `scripts/run_baselines.py` and `scripts/run_lightgbm.py` — log the new metric to W&B and stdout alongside MAE/QLIKE.
+- `tests/test_walkforward.py` — add tests for: (a) directional accuracy on a synthetic frame with known signs, (b) zero-return exclusion behavior.
+
+Acceptance:
+- `uv run pytest -q` and `uv run ruff check .` pass.
+- All existing baseline + LightGBM runs report directional accuracy without regressing MAE values.
+
+Handoff: plan first; dispatch to Codex via `codex:rescue`; verify; commit; push; open PR; squash-merge.
+```
+
+---
+
+## Prompt 8 — Charts
+
+**Branch:** `feat/report-charts` • **Depends on:** Prompts 6 + 7 merged • **Est:** 1h
+
+```
+Plan and implement the chart-generation script for the report. Headless matplotlib, no interactivity.
+
+Goal: `python -m scripts.make_charts` writes two PNGs ready to embed in `REPORT.md`.
+
+Files to create:
+- `scripts/make_charts.py` — reads `data/processed/ablation_results.csv` and the LightGBM feature-importance artifact (persist this from `scripts/run_lightgbm.py --ablation` — extend that script if needed). Saves:
+  - `docs/charts/walkforward_mae.png` — grouped bar chart, x = fold (1..5 + overall), y = MAE, four series (price / +finbert / +news / +all). Clear title, axis labels with units, legend, no chartjunk. Seaborn whitegrid style.
+  - `docs/charts/feature_importance.png` — horizontal bar chart, top 15 features by LightGBM gain, LLM-derived features color-highlighted.
+- Add a smoke test in `tests/test_make_charts.py` that runs the script against a tiny synthetic CSV and asserts both PNGs are written and non-empty.
+
+Acceptance:
+- `uv run pytest -q` and `uv run ruff check .` pass.
+- Both PNGs render with a 24pt+ title and readable axis labels.
+
+Handoff: plan first; dispatch to Codex via `codex:rescue`; verify; commit; push; open PR; squash-merge.
+```
+
+---
+
+## Prompt 9 — REPORT.md
+
+**Branch:** `docs/report` • **Depends on:** Prompts 6 + 7 + 8 merged • **Est:** 3h
+
+```
+Plan and write `REPORT.md` — the primary deliverable for the hiring committee. Honest, concise, evidence-backed.
+
+Goal: a single markdown report (~600–900 words plus tables and embedded charts) that a hiring committee can read in 10 minutes and understand: the question, the method, the result, and the limits.
+
+File to create: `REPORT.md` at repo root, with the following sections in order:
+1. **TL;DR** — 3 sentences: thesis, headline number from `data/processed/ablation_results.csv` when available, honest caveat. If the news ablation is blocked, say that explicitly instead of presenting `NaN` rows as a completed result.
+2. **Problem & success metric** — lifted from `SPEC.md`, do not paraphrase the stopping rule.
+3. **Data** — including honest gaps (NewsAPI 100-cap, FMP entitlement block, only 6 transcripts, 10-K not modeled).
+4. **Methodology** — walk-forward 5-fold expanding, leakage controls, point at `tests/test_leakage.py` and `tests/test_llm_features.py` by name.
+5. **Baselines** — the persistence (0.020326) and HAR (0.017170) numbers in a table.
+6. **LLM ablation** — a table from `data/processed/ablation_results.csv` when all rows are estimable; otherwise report the completed rows and state that `price+news` / `price+all` are structurally blocked under the current split and NewsAPI free-tier history. Do not present `NaN` rows as finished results. Embed `docs/charts/walkforward_mae.png` directly under the table only if the plotted data are all finite.
+7. **Feature importance** — embed `docs/charts/feature_importance.png` and discuss what the model is and isn't using.
+8. **Limitations** — explicit and generous: small N (6 calls), single ticker, single-regime test window, FinBERT pretraining mismatch, news corpus only 30 days, no macro controls.
+9. **What I'd do with another week** — 3 concrete prioritized items.
+
+Constraints:
+- Do not invent numbers. Every quantitative claim must come from a file in the repo (cite the path, e.g. "`data/processed/ablation_results.csv`").
+- If `mae_price+all >= mae_price` (LLM did not help), say so plainly. The negative-result framing is in `SPEC.md` — use it.
+- If the news variants are non-estimable, say so plainly and attribute it to the unchanged canonical split plus limited NewsAPI history.
+- No emoji, no marketing language, no "we beat the market".
+
+Acceptance:
+- `REPORT.md` renders cleanly on GitHub (preview locally with `grip` or push to a draft branch and check).
+- Both embedded PNGs load.
+- A reader who has only read `REPORT.md` can answer: what was the question, what was the result, what are the honest limits.
+
+Handoff: plan first in plan mode (this one is prose, but still plan the section-by-section structure before writing). Once approved, dispatch the writing to Codex via `codex:rescue`. Verify the embedded numbers against the source CSV manually before commit. Commit, push, open PR, squash-merge.
+```
+
+---
+
+## Prompt 10 — Final hygiene
+
+**Branch:** `chore/final-hygiene` • **Depends on:** Prompt 9 merged • **Est:** 1h
+
+```
+Plan and execute the final cleanup pass before submission.
+
+Goal: master is green, README points at REPORT.md, progress log is current, no secrets in git history, repo builds clean from a fresh clone.
+
+Files to modify:
+- `README.md` — add a short header pointing at `REPORT.md` as the primary deliverable, and a "Reproducing" section: clone, `uv sync`, `cp .env.example .env`, `uv run pytest -q`, `uv run python -m scripts.run_baselines`, `uv run python -m scripts.run_lightgbm --ablation`, `uv run python -m scripts.make_charts`. Keep it under 60 lines.
+- `notes/progress.md` — append a final session entry summarizing what shipped and what was cut (10-K LLM, slide deck) per the revised SPEC.
+- `.agents/open-questions.md` — clear out any resolved questions; if empty, leave a single line `(no open blockers)`.
+
+Verification (run, do not skip):
+- `uv run pytest -q` — all green, no skips beyond the gated slow FinBERT test.
+- `uv run ruff check .` — green.
+- `git log -p | grep -iE "api[_-]?key|secret|token" | head` — should return nothing sensitive.
+- Fresh-clone smoke: in a temp dir, clone the repo, `uv sync`, run the README's reproducing block end-to-end. If anything breaks, fix it in this PR.
+
+Acceptance:
+- `uv run pytest -q` and `uv run ruff check .` pass.
+- Fresh-clone smoke passes locally.
+- README.md and REPORT.md both render cleanly on GitHub.
+
+Handoff: plan first; dispatch to Codex via `codex:rescue` for the file edits; run the verification block yourself (Claude Code, not Codex) since it touches a fresh clone; commit, push, open PR, squash-merge.
+```
+
+---
+
+## Cut-points (if behind)
+
+Apply these in order if the clock runs out — taken from `SPEC.md`:
+
+1. **Prompt 4 over budget by >1.5h** → ship Prompts 1–3 + 6 (FinBERT-only ablation), skip Prompts 4–5 entirely. Update `REPORT.md` (Prompt 9) to reflect the reduced scope.
+2. **Prompt 1 fails to match HAR** → 1h max investigation, then ship as a finding in `REPORT.md` ("HAR is a strong specialized baseline; LightGBM without HAR-style engineered features underperforms on N≈1000").
+3. **Sunday afternoon lost** → drop Prompt 8 (charts). Ship `REPORT.md` text + ablation table only.
+
+Don't cut `REPORT.md` (Prompt 9). The writeup is the deliverable.
+
+---
+
+## Reminders
+
+- Branch naming and PR hygiene: see `AGENTS.md`. Never force-push master, never merge a red branch.
+- Every prompt's plan should respect the **Hard rules** in `AGENTS.md` — no random splits, no pre-split fits, no future leakage, no weakened tests.
+- Stopping rule: see `SPEC.md`. A credible negative result is a valid deliverable.

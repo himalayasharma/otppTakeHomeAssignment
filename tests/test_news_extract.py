@@ -14,6 +14,7 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
 import scripts.build_news_scores as build_news_scores  # noqa: E402
+from src.data import non_price_data  # noqa: E402
 from src.llm.news_extract import (  # noqa: E402
     MODEL_NAME,
     RAW_SCORE_COLUMNS,
@@ -76,6 +77,53 @@ def _article(
         "content": "Example content about NVDA and AI demand.",
         "url": url,
         "publishedAt": published_at,
+    }
+
+
+def _complete_newsapi_payload(
+    *articles: dict[str, object],
+    collection_complete: bool = True,
+) -> dict[str, object]:
+    return {
+        "metadata": {
+            "source": "NewsAPI",
+            "query_profile": non_price_data.NEWSAPI_OVERLAP_REPAIR_PROFILE,
+            "query_params": {
+                "q": non_price_data.NEWSAPI_OVERLAP_QUERY,
+                "from": non_price_data.DEFAULT_NEWSAPI_FROM_DATE,
+                "to": non_price_data.DEFAULT_NEWSAPI_TO_DATE,
+                "language": "en",
+                "sortBy": "publishedAt",
+                "pageSize": 100,
+                "maxRecordsPerDay": 100,
+                "searchIn": non_price_data.NEWSAPI_OVERLAP_SEARCH_IN,
+                "domains": ",".join(non_price_data.NEWSAPI_OVERLAP_DOMAINS),
+            },
+            "requested_range": {
+                "from": non_price_data.DEFAULT_NEWSAPI_FROM_DATE,
+                "to": non_price_data.DEFAULT_NEWSAPI_TO_DATE,
+            },
+            "search_in": non_price_data.NEWSAPI_OVERLAP_SEARCH_IN,
+            "domains": list(non_price_data.NEWSAPI_OVERLAP_DOMAINS),
+            "chunking": {
+                "strategy": "utc_day",
+                "window_days": 1,
+                "windows_requested": 1,
+                "windows_completed": 1,
+                "windows": [
+                    {
+                        "day": non_price_data.DEFAULT_NEWSAPI_FROM_DATE,
+                        "from": "2026-03-25T00:00:00Z",
+                        "to": "2026-03-25T23:59:59Z",
+                        "result_count": len(articles),
+                        "hit_record_cap": False,
+                    }
+                ],
+                "truncated_days": [],
+            },
+            "collection_complete": collection_complete,
+        },
+        "articles": list(articles),
     }
 
 
@@ -236,11 +284,10 @@ def test_builder_smoke_writes_both_parquets_and_prints_cost(
     raw_output_path = tmp_path / "news_scores_raw.parquet"
     daily_output_path = tmp_path / "news_scores.parquet"
     payload = {
-        "metadata": {"source": "NewsAPI"},
-        "articles": [
+        **_complete_newsapi_payload(
             _article(title="Good article", url="https://example.com/good"),
             _article(title="Bad article", url="https://example.com/bad"),
-        ],
+        ),
     }
     input_path.write_text(json.dumps(payload), encoding="utf-8")
 
@@ -307,7 +354,7 @@ def test_builder_returns_non_zero_when_all_articles_fail(
 ) -> None:
     input_path = tmp_path / "news.json"
     input_path.write_text(
-        json.dumps({"metadata": {}, "articles": [_article()]}),
+        json.dumps(_complete_newsapi_payload(_article())),
         encoding="utf-8",
     )
     client = _FakeClient([_fake_response(None), _fake_response(None)])
@@ -327,7 +374,7 @@ def test_builder_returns_non_zero_when_api_key_is_missing(
 ) -> None:
     input_path = tmp_path / "news.json"
     input_path.write_text(
-        json.dumps({"metadata": {}, "articles": [_article()]}),
+        json.dumps(_complete_newsapi_payload(_article())),
         encoding="utf-8",
     )
 
@@ -342,3 +389,46 @@ def test_builder_returns_non_zero_when_api_key_is_missing(
 
     assert exit_code == 1
     assert "ANTHROPIC_API_KEY is unset." in capsys.readouterr().out
+
+
+def test_builder_rejects_incomplete_newsapi_payload(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    input_path = tmp_path / "news.json"
+    input_path.write_text(
+        json.dumps(_complete_newsapi_payload(_article(), collection_complete=False)),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(build_news_scores, "load_dotenv", lambda: None)
+
+    exit_code = build_news_scores.main(
+        ["--input-path", str(input_path)],
+        client=_FakeClient([]),
+    )
+
+    assert exit_code == 1
+    assert "collection_complete=false" in capsys.readouterr().out
+
+
+def test_builder_rejects_payload_missing_overlap_profile_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    payload = _complete_newsapi_payload(_article())
+    del payload["metadata"]["domains"]
+    input_path = tmp_path / "news.json"
+    input_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    monkeypatch.setattr(build_news_scores, "load_dotenv", lambda: None)
+
+    exit_code = build_news_scores.main(
+        ["--input-path", str(input_path)],
+        client=_FakeClient([]),
+    )
+
+    assert exit_code == 1
+    assert "domain whitelist" in capsys.readouterr().out

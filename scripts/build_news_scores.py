@@ -11,6 +11,7 @@ import pandas as pd
 from anthropic import Anthropic
 from dotenv import load_dotenv
 
+from src.data.non_price_data import validate_complete_newsapi_overlap_payload
 from src.llm.news_extract import (
     RAW_SCORE_COLUMNS,
     ArticleParseError,
@@ -51,6 +52,7 @@ def _load_articles(path: Path) -> list[dict[str, Any]]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
         raise ValueError(f"Expected dict payload in {path}, got {type(payload).__name__}.")
+    validate_complete_newsapi_overlap_payload(payload)
     articles = payload.get("articles")
     if not isinstance(articles, list):
         raise ValueError(f"Expected 'articles' list in {path}.")
@@ -85,7 +87,11 @@ def main(argv: list[str] | None = None, *, client: Any | None = None) -> int:
     args = _parse_args(argv)
     load_dotenv()
 
-    articles = _load_articles(args.input_path)
+    try:
+        articles = _load_articles(args.input_path)
+    except ValueError as exc:
+        print(str(exc))
+        return 1
     if client is None:
         try:
             scoring_client = _build_client()

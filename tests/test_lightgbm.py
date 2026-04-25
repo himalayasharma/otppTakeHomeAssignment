@@ -12,16 +12,20 @@ sys.path.insert(0, str(REPO_ROOT))
 
 import scripts.run_lightgbm as run_lightgbm  # noqa: E402
 from scripts.run_lightgbm import (  # noqa: E402
+    PRICE_ALL_FEATURE_COLUMNS,
     HAR_REFERENCE_MAE,
     N_FOLDS,
     PRICE_FINBERT_FEATURE_COLUMNS,
+    PRICE_NEWS_FEATURE_COLUMNS,
     PRICE_ONLY_FEATURE_COLUMNS,
     TARGET_COL,
     TEST_FRACTION,
     _build_dataset,
+    _fold_valid_counts,
     _lightgbm_fit_fn,
 )
 from src.eval.walkforward import walk_forward  # noqa: E402
+from src.features.llm_features import attach_news as real_attach_news  # noqa: E402
 from src.models.lightgbm_model import fit_predict  # noqa: E402
 
 
@@ -258,3 +262,200 @@ def test_main_price_plus_finbert_runs_side_by_side(monkeypatch: pytest.MonkeyPat
     assert dummy_run.summary["comparison/mae_delta_abs"] == 0.0
     assert dummy_run.summary["comparison/mae_delta_rel"] == 0.0
     assert dummy_run.finished is True
+
+
+def test_main_ablation_writes_summary_csv(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    captured_feature_cols: list[tuple[str, ...]] = []
+    dummy_run = _DummyRun()
+    output_path = tmp_path / "ablation_results.csv"
+
+    def fake_attach_finbert(df: pd.DataFrame) -> pd.DataFrame:
+        out = df.copy()
+        for idx, column in enumerate(run_lightgbm.FINBERT_FEATURE_COLUMNS, start=1):
+            out[column] = np.linspace(0.01 * idx, 0.02 * idx, len(out), dtype=np.float64)
+        return out
+
+    def fake_attach_news(df: pd.DataFrame) -> pd.DataFrame:
+        out = df.copy()
+        for idx, column in enumerate(run_lightgbm.NEWS_FEATURE_COLUMNS, start=1):
+            out[column] = np.linspace(1.0 * idx, 2.0 * idx, len(out), dtype=np.float64)
+        return out
+
+    def fake_attach_all(df: pd.DataFrame) -> pd.DataFrame:
+        return fake_attach_news(fake_attach_finbert(df))
+
+    def fake_fit_predict(
+        *,
+        train_df: pd.DataFrame,
+        test_df: pd.DataFrame,
+        target_col: str,
+        feature_cols: list[str],
+        seed: int,
+    ) -> np.ndarray:
+        del train_df, seed
+        captured_feature_cols.append(tuple(feature_cols))
+        return test_df[target_col].to_numpy(dtype=np.float64, copy=True) + 0.001
+
+    monkeypatch.setattr(
+        run_lightgbm, "load_prices", lambda: _synthetic_loaded_prices(240)
+    )
+    monkeypatch.setattr(run_lightgbm, "attach_finbert", fake_attach_finbert)
+    monkeypatch.setattr(run_lightgbm, "attach_news", fake_attach_news)
+    monkeypatch.setattr(run_lightgbm, "attach_all", fake_attach_all)
+    monkeypatch.setattr(run_lightgbm, "fit_predict", fake_fit_predict)
+    monkeypatch.setattr(run_lightgbm, "_git_commit", lambda: "testsha")
+    monkeypatch.setattr(run_lightgbm, "_init_wandb", lambda config: (dummy_run, "disabled"))
+    monkeypatch.setattr(run_lightgbm.wandb, "Table", lambda dataframe: dataframe)
+    monkeypatch.setattr(run_lightgbm, "ABLATION_RESULTS_PATH", output_path)
+
+    exit_code = run_lightgbm.main(["--ablation"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert output_path.exists()
+    result_df = pd.read_csv(output_path)
+    assert tuple(PRICE_ONLY_FEATURE_COLUMNS) in captured_feature_cols
+    assert tuple(PRICE_FINBERT_FEATURE_COLUMNS) in captured_feature_cols
+    assert tuple(PRICE_NEWS_FEATURE_COLUMNS) in captured_feature_cols
+    assert tuple(PRICE_ALL_FEATURE_COLUMNS) in captured_feature_cols
+    assert result_df.shape[0] == 4
+    assert list(result_df.columns) == [
+        "feature_set",
+        "overall_mae",
+        "fold_1_mae",
+        "fold_2_mae",
+        "fold_3_mae",
+        "fold_4_mae",
+        "fold_5_mae",
+        "overall_qlike",
+    ]
+    assert result_df["feature_set"].tolist() == [
+        "price",
+        "price+finbert",
+        "price+news",
+        "price+all",
+    ]
+    assert "| feature_set | overall_mae | fold_1_mae |" in captured.out
+    assert dummy_run.finished is True
+
+
+def test_fold_valid_counts_reports_tail_only_valid_rows() -> None:
+    dataset = _synthetic_frame(periods=40)
+    dataset["feature_a"] = np.nan
+    dataset.loc[dataset.index[-1], "feature_a"] = 1.0
+
+    fold_counts = _fold_valid_counts(
+        dataset,
+        feature_cols=["feature_a", "feature_b"],
+        n_folds=N_FOLDS,
+        test_fraction=TEST_FRACTION,
+    )
+
+    assert len(fold_counts) == N_FOLDS
+    assert [fold_count["test_valid"] for fold_count in fold_counts] == [0, 0, 0, 0, 1]
+    assert [fold_count["train_valid"] for fold_count in fold_counts] == [0, 0, 0, 0, 0]
+
+
+def test_main_ablation_fails_on_zero_overlap_news_variant(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    output_path = tmp_path / "ablation_results.csv"
+    late_news_path = tmp_path / "late_news_scores.parquet"
+    late_news_df = pd.DataFrame(
+        {
+            "as_of": pd.to_datetime(["2024-04-01", "2024-04-02"]).astype(
+                "datetime64[ns]"
+            ),
+            "news_sent_mean": pd.Series([0.2, -0.1], dtype="float64"),
+            "news_risk_max": pd.Series([0.7, 0.9], dtype="float64"),
+            "news_count": pd.Series([2, 1], dtype="int64"),
+            **{
+                column: pd.Series([0, 1], dtype="int64")
+                for column in run_lightgbm.NEWS_FEATURE_COLUMNS[3:]
+            },
+        }
+    ).loc[:, ["as_of", *run_lightgbm.NEWS_FEATURE_COLUMNS]]
+    late_news_df.to_parquet(late_news_path, engine="pyarrow", index=False)
+
+    def fake_attach_finbert(df: pd.DataFrame) -> pd.DataFrame:
+        out = df.copy()
+        for idx, column in enumerate(run_lightgbm.FINBERT_FEATURE_COLUMNS, start=1):
+            out[column] = np.linspace(0.01 * idx, 0.02 * idx, len(out), dtype=np.float64)
+        return out
+
+    def fake_attach_news(df: pd.DataFrame) -> pd.DataFrame:
+        return real_attach_news(df, scores_path=late_news_path)
+
+    monkeypatch.setattr(run_lightgbm, "load_prices", lambda: _synthetic_loaded_prices(40))
+    monkeypatch.setattr(run_lightgbm, "attach_finbert", fake_attach_finbert)
+    monkeypatch.setattr(run_lightgbm, "attach_news", fake_attach_news)
+    monkeypatch.setattr(run_lightgbm, "ABLATION_RESULTS_PATH", output_path)
+    monkeypatch.setattr(run_lightgbm, "DEFAULT_NEWS_SCORES_PATH", late_news_path)
+    monkeypatch.setattr(
+        run_lightgbm,
+        "_init_wandb",
+        lambda config: pytest.fail("W&B should not initialize on a blocked run"),
+    )
+
+    exit_code = run_lightgbm.main(["--ablation"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert not output_path.exists()
+    assert "Feature set 'price+news'" in captured.err
+    assert "has no estimable fold" in captured.err
+    assert "Latest target-eligible price date" in captured.err
+    assert "Feature-valid date range: none" in captured.err
+    assert "Per-fold valid train/test counts:" in captured.err
+    assert "News as_of range: 2024-04-01 to 2024-04-02" in captured.err
+    assert "Current NewsAPI history is too short" in captured.err
+
+
+def test_main_ablation_fails_on_tail_only_news_rows_without_replacing_csv(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    output_path = tmp_path / "ablation_results.csv"
+    output_path.write_text("feature_set,overall_mae\nsentinel,1.0\n", encoding="utf-8")
+
+    def fake_attach_finbert(df: pd.DataFrame) -> pd.DataFrame:
+        out = df.copy()
+        for idx, column in enumerate(run_lightgbm.FINBERT_FEATURE_COLUMNS, start=1):
+            out[column] = np.linspace(0.01 * idx, 0.02 * idx, len(out), dtype=np.float64)
+        return out
+
+    def fake_attach_news(df: pd.DataFrame) -> pd.DataFrame:
+        out = df.copy()
+        for column in run_lightgbm.NEWS_FEATURE_COLUMNS:
+            out[column] = np.nan
+        out.loc[out.index[-6], run_lightgbm.NEWS_FEATURE_COLUMNS] = 1.0
+        return out
+
+    monkeypatch.setattr(run_lightgbm, "load_prices", lambda: _synthetic_loaded_prices(200))
+    monkeypatch.setattr(run_lightgbm, "attach_finbert", fake_attach_finbert)
+    monkeypatch.setattr(run_lightgbm, "attach_news", fake_attach_news)
+    monkeypatch.setattr(run_lightgbm, "ABLATION_RESULTS_PATH", output_path)
+    monkeypatch.setattr(
+        run_lightgbm,
+        "_init_wandb",
+        lambda config: pytest.fail("W&B should not initialize on a blocked run"),
+    )
+
+    original_csv = output_path.read_text(encoding="utf-8")
+    exit_code = run_lightgbm.main(["--ablation"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert output_path.read_text(encoding="utf-8") == original_csv
+    assert "Feature set 'price+news'" in captured.err
+    assert "has no estimable fold" in captured.err
+    assert "Feature-valid date range:" in captured.err
+    assert "fold_5: train_valid=0 test_valid=1" in captured.err
+    assert "News as_of range:" in captured.err
