@@ -64,3 +64,7 @@ Next: wire the FinBERT feature frame into the LightGBM `price+finbert` path and 
 ## Day 6 (2026-04-24, 0.6h)
 Done: implemented the `scripts/run_lightgbm.py --features price+finbert` side-by-side ablation, fixed `attach_finbert(...)` to preserve engineered price columns, added smoke/regression coverage, and verified `uv run pytest -q`, `uv run ruff check .`, and the real CLI run; price-only MAE was 0.016618 vs price+FinBERT MAE 0.016983 (`delta_rel=+0.021970`, so FinBERT did not improve this ablation). Branch: `feat/llm-features-finbert-join`. W&B: `fsj6th7j`.
 Next: proceed to the news-feature path and final ablation table, carrying forward the honest negative FinBERT result as the current benchmark comparison. Branch: `feat/llm-features-finbert-join`.
+
+## Day 6 (2026-04-24, 0.8h)
+Done: added Claude news extraction in `src/llm/news_extract.py`, the `scripts/build_news_scores.py` builder, and end-to-end mocked coverage for structured parse retries, cost accounting, aggregation, and parquet writing; `uv run pytest -q` and `uv run ruff check .` passed, while the real builder exits cleanly because `ANTHROPIC_API_KEY` is unset in this environment. Branch: `feat/claude-news-extract`. W&B: N/A.
+Next: run the real news scoring job once `ANTHROPIC_API_KEY` is available, then wire the daily news parquet into the downstream feature frame for the price+news and price+all ablations. Branch: `feat/claude-news-extract`.
