@@ -85,6 +85,18 @@ def test_join_preserves_row_count_and_index_and_payload() -> None:
     pdt.assert_frame_equal(out[prices.columns], prices)
 
 
+def test_join_accepts_featured_price_frame_and_preserves_extra_columns() -> None:
+    prices = _synthetic_price_frame(periods=60).assign(
+        ret_lag_1=np.linspace(-0.02, 0.02, 60),
+        vol_lag_5=np.linspace(0.11, 0.22, 60),
+    )
+
+    out = _join_finbert(prices, _synthetic_scores([str(prices.index[20].date())]))
+
+    pdt.assert_frame_equal(out[prices.columns], prices)
+    assert out.columns.tolist() == [*prices.columns.tolist(), *FINBERT_FEATURE_COLUMNS]
+
+
 def test_join_is_deterministic() -> None:
     prices = _synthetic_price_frame(periods=60)
     scores = _synthetic_scores([str(prices.index[20].date()), str(prices.index[40].date())])
