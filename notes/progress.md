@@ -162,3 +162,7 @@ Next: push the green reveal-toggle fix to PR #30 or redeploy the Hugging Face Sp
 ## Day 8 (2026-04-26, 0.2h)
 Done: rebased PR #32 branch onto `origin/master` so the diff contains only the reveal-toggle fix plus this handoff, then verified `uv run pytest -q tests/test_demo_app.py`, `uv run pytest -q`, and `uv run ruff check .`. Branch: `feat/demo-app`. W&B: N/A.
 Next: force-with-lease push the rebased branch and monitor PR #32 mergeability/checks. Branch: `feat/demo-app`.
+
+## Day 8 (2026-04-26, 0.2h)
+Done: redeployed `demo_app/` from `feat/demo-app` to Hugging Face Space `EchoSummit/nvda-volatility-demo` at Space commit `a3c2060`, verified runtime `RUNNING`, HTTP 200 app/assets, and scene 6/7 reveal-toggle callbacks. Branch: `feat/demo-app`. W&B: N/A.
+Next: share the deployed Space URL and keep PR #32 focused on the reveal-toggle fix. Branch: `feat/demo-app`.
