@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
 from typing import Any, Literal
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote
+from urllib.request import Request, urlopen
 
 import pandas as pd
 import pandera.pandas as pa
@@ -22,6 +26,7 @@ TOPIC_TAGS = [
     "other",
 ]
 MODEL_NAME = "claude-haiku-4-5-20251001"
+GEMINI_MODEL_NAME = "gemini-2.5-flash-lite"
 MAX_TOKENS = 160
 SYSTEM_PROMPT = (
     "You extract structured signals from one news article for NVIDIA (NVDA). "
@@ -36,6 +41,11 @@ INPUT_COST_PER_MTOK_USD = 1.00
 CACHE_WRITE_COST_PER_MTOK_USD = 1.25
 CACHE_READ_COST_PER_MTOK_USD = 0.10
 OUTPUT_COST_PER_MTOK_USD = 5.00
+GEMINI_INPUT_COST_PER_MTOK_USD = 0.10
+GEMINI_OUTPUT_COST_PER_MTOK_USD = 0.40
+GEMINI_ENDPOINT_TEMPLATE = (
+    "https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+)
 
 TopicTag = Literal[
     "earnings",
@@ -101,7 +111,11 @@ NEWS_DAILY_SCHEMA = pa.DataFrameSchema(
 
 
 class ArticleParseError(RuntimeError):
-    """Raised when Claude returns unusable structured output after retry."""
+    """Raised when a model returns unusable structured output after retry."""
+
+
+class ArticleScoringError(RuntimeError):
+    """Raised when scoring should stop instead of dropping an article."""
 
 
 class ClaudeExtractionPayload(BaseModel):
@@ -139,6 +153,23 @@ def _article_timestamp(article: dict[str, Any]) -> tuple[datetime, datetime]:
     published_at = timestamp.tz_localize(None).to_pydatetime()
     as_of = timestamp.normalize().tz_localize(None).to_pydatetime()
     return published_at, as_of
+
+
+def article_resume_key(article: dict[str, Any]) -> tuple[str, str, str]:
+    published_at, _ = _article_timestamp(article)
+    return (
+        str(article.get("url") or ""),
+        str(article.get("title") or ""),
+        pd.Timestamp(published_at).isoformat(),
+    )
+
+
+def score_resume_key(score: ArticleScore) -> tuple[str, str, str]:
+    return (
+        score.url,
+        score.title,
+        pd.Timestamp(score.published_at).isoformat(),
+    )
 
 
 def _article_prompt(article: dict[str, Any]) -> str:
@@ -191,28 +222,39 @@ def _payload_from_response(response: Any) -> ClaudeExtractionPayload:
     raise ArticleParseError("Claude response did not include parsed structured output.")
 
 
-def score_article(client: Any, article: dict[str, Any]) -> ArticleScore:
+def score_article(
+    client: Any,
+    article: dict[str, Any],
+    *,
+    model: str = MODEL_NAME,
+) -> ArticleScore:
     published_at, as_of = _article_timestamp(article)
     last_error: Exception | None = None
 
     for _attempt in range(2):
-        response = client.beta.messages.parse(
-            model=MODEL_NAME,
-            max_tokens=MAX_TOKENS,
-            temperature=0,
-            output_format=ClaudeExtractionPayload,
-            system=[
-                {
-                    "type": "text",
-                    "text": SYSTEM_PROMPT,
-                    "cache_control": {"type": "ephemeral", "ttl": "5m"},
-                }
-            ],
-            messages=[{"role": "user", "content": _article_prompt(article)}],
-        )
         try:
+            response = client.beta.messages.parse(
+                model=model,
+                max_tokens=MAX_TOKENS,
+                temperature=0,
+                output_format=ClaudeExtractionPayload,
+                system=[
+                    {
+                        "type": "text",
+                        "text": SYSTEM_PROMPT,
+                        "cache_control": {"type": "ephemeral", "ttl": "5m"},
+                    }
+                ],
+                messages=[{"role": "user", "content": _article_prompt(article)}],
+            )
             payload = _payload_from_response(response)
-        except (ArticleParseError, ValidationError, TypeError, AttributeError) as exc:
+        except (
+            ArticleParseError,
+            ValidationError,
+            TypeError,
+            AttributeError,
+            RuntimeError,
+        ) as exc:
             last_error = exc
             continue
 
@@ -239,6 +281,149 @@ def score_article(client: Any, article: dict[str, Any]) -> ArticleScore:
         )
 
     raise ArticleParseError("Claude structured parse failed after 2 attempts.") from last_error
+
+
+class GeminiRESTClient:
+    """Small REST client for Gemini structured output without adding a SDK dependency."""
+
+    def __init__(
+        self,
+        api_key: str,
+        *,
+        endpoint_template: str = GEMINI_ENDPOINT_TEMPLATE,
+        timeout_seconds: int = 60,
+    ) -> None:
+        self._api_key = api_key
+        self._endpoint_template = endpoint_template
+        self._timeout_seconds = timeout_seconds
+
+    def generate_content(
+        self,
+        *,
+        model: str,
+        prompt: str,
+        response_json_schema: dict[str, Any],
+    ) -> dict[str, Any]:
+        endpoint = self._endpoint_template.format(model=quote(model, safe=""))
+        body = {
+            "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+            "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+            "generationConfig": {
+                "temperature": 0,
+                "maxOutputTokens": MAX_TOKENS,
+                "responseMimeType": "application/json",
+                "responseJsonSchema": response_json_schema,
+            },
+        }
+        request = Request(
+            endpoint,
+            data=json.dumps(body).encode("utf-8"),
+            headers={
+                "Content-Type": "application/json",
+                "x-goog-api-key": self._api_key,
+            },
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=self._timeout_seconds) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            if 400 <= exc.code < 500:
+                raise ArticleScoringError(f"Gemini HTTP {exc.code}: {detail}") from exc
+            raise RuntimeError(f"Gemini HTTP {exc.code}: {detail}") from exc
+        except URLError as exc:
+            raise RuntimeError(f"Gemini network error: {exc.reason}") from exc
+
+
+def _gemini_response_text(response: dict[str, Any]) -> str:
+    candidates = response.get("candidates")
+    if not isinstance(candidates, list) or not candidates:
+        raise ArticleParseError("Gemini response did not include candidates.")
+    content = candidates[0].get("content") if isinstance(candidates[0], dict) else None
+    parts = content.get("parts") if isinstance(content, dict) else None
+    if not isinstance(parts, list) or not parts:
+        raise ArticleParseError("Gemini response did not include text parts.")
+    text = parts[0].get("text") if isinstance(parts[0], dict) else None
+    if not isinstance(text, str) or not text.strip():
+        raise ArticleParseError("Gemini response text was empty.")
+    return text
+
+
+def _gemini_payload_from_response(response: dict[str, Any]) -> ClaudeExtractionPayload:
+    text = _gemini_response_text(response)
+    try:
+        raw_payload = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise ArticleParseError("Gemini response text was not valid JSON.") from exc
+    return ClaudeExtractionPayload.model_validate(raw_payload)
+
+
+def _gemini_usage_value(usage: dict[str, Any], field_name: str) -> int:
+    value = usage.get(field_name, 0) or 0
+    return int(value)
+
+
+def _gemini_usage_cost_usd(usage: dict[str, Any]) -> float:
+    input_tokens = _gemini_usage_value(usage, "promptTokenCount")
+    output_tokens = _gemini_usage_value(usage, "candidatesTokenCount")
+    return float(
+        (input_tokens / 1_000_000) * GEMINI_INPUT_COST_PER_MTOK_USD
+        + (output_tokens / 1_000_000) * GEMINI_OUTPUT_COST_PER_MTOK_USD
+    )
+
+
+def score_article_gemini(
+    client: Any,
+    article: dict[str, Any],
+    *,
+    model: str = GEMINI_MODEL_NAME,
+) -> ArticleScore:
+    published_at, as_of = _article_timestamp(article)
+    last_error: Exception | None = None
+    response_schema = ClaudeExtractionPayload.model_json_schema()
+
+    for _attempt in range(2):
+        try:
+            response = client.generate_content(
+                model=model,
+                prompt=_article_prompt(article),
+                response_json_schema=response_schema,
+            )
+            payload = _gemini_payload_from_response(response)
+        except ArticleScoringError:
+            raise
+        except (
+            ArticleParseError,
+            ValidationError,
+            TypeError,
+            AttributeError,
+            RuntimeError,
+        ) as exc:
+            last_error = exc
+            continue
+
+        usage = response.get("usageMetadata")
+        if not isinstance(usage, dict):
+            raise ArticleParseError("Gemini response is missing usage metadata.")
+
+        return ArticleScore(
+            published_at=published_at,
+            as_of=as_of,
+            url=str(article.get("url") or ""),
+            title=str(article.get("title") or ""),
+            source_name=str((article.get("source") or {}).get("name") or ""),
+            sentiment_score=payload.sentiment_score,
+            risk_score=payload.risk_score,
+            topic_tags=_normalize_topic_tags(payload.topic_tags),
+            input_tokens=_gemini_usage_value(usage, "promptTokenCount"),
+            output_tokens=_gemini_usage_value(usage, "candidatesTokenCount"),
+            cache_creation_input_tokens=0,
+            cache_read_input_tokens=0,
+            total_cost_usd=_gemini_usage_cost_usd(usage),
+        )
+
+    raise ArticleParseError("Gemini structured parse failed after 2 attempts.") from last_error
 
 
 def _empty_daily_frame() -> pd.DataFrame:

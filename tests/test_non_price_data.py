@@ -133,11 +133,203 @@ def test_collect_newsapi_payload_passes_overlap_repair_profile_to_requests(
 def test_fetch_fmp_stock_news_returns_list(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("FMP_KEY", "token")
     expected = [{"title": "NVIDIA", "publishedDate": "2026-04-01 12:00:00"}]
-    monkeypatch.setattr(non_price_data, "_request_json", lambda url: expected)
+    seen_urls: list[str] = []
 
-    records = non_price_data.fetch_fmp_stock_news("NVDA", limit=500)
+    def fake_request_json(url: str) -> list[dict[str, object]]:
+        seen_urls.append(url)
+        return expected
+
+    monkeypatch.setattr(non_price_data, "_request_json", fake_request_json)
+
+    records = non_price_data.fetch_fmp_stock_news(
+        "NVDA",
+        limit=500,
+        page=2,
+        from_date="2025-01-01",
+        to_date="2026-04-10",
+    )
+    params = parse_qs(urlparse(seen_urls[0]).query)
 
     assert records == expected
+    assert params["symbols"] == ["NVDA"]
+    assert "tickers" not in params
+    assert params["page"] == ["2"]
+    assert params["from"] == ["2025-01-01"]
+    assert params["to"] == ["2026-04-10"]
+
+
+def test_collect_fmp_backfill_payload_paginates_filters_and_dedupes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen_pages: list[int | None] = []
+    duplicate = {
+        "symbol": "NVDA",
+        "publishedDate": "2025-01-02 09:30:00",
+        "title": "NVIDIA data center update",
+        "url": "https://example.com/jan2",
+    }
+
+    def fake_fetch_fmp_stock_news(
+        ticker: str,
+        limit: int = 500,
+        page: int | None = None,
+        from_date: str | None = None,
+        to_date: str | None = None,
+    ) -> list[dict[str, object]]:
+        assert ticker == "NVDA"
+        assert limit == 2
+        assert from_date == "2025-01-01"
+        assert to_date == "2026-04-10"
+        seen_pages.append(page)
+        pages = {
+            0: [
+                {
+                    "symbol": "NVDA",
+                    "publishedDate": "2025-03-10 12:00:00",
+                    "title": "NVIDIA March",
+                    "url": "https://example.com/march",
+                },
+                {
+                    "symbol": "NVDA",
+                    "publishedDate": "2025-02-01 12:00:00",
+                    "title": "NVIDIA February",
+                    "url": "https://example.com/feb",
+                },
+            ],
+            1: [duplicate, dict(duplicate)],
+            2: [
+                {
+                    "symbol": "NVDA",
+                    "publishedDate": "2024-12-31 23:59:00",
+                    "title": "NVIDIA old",
+                    "url": "https://example.com/old",
+                }
+            ],
+        }
+        return pages[page]
+
+    monkeypatch.setattr(
+        non_price_data, "fetch_fmp_stock_news", fake_fetch_fmp_stock_news
+    )
+
+    payload = non_price_data.collect_fmp_backfill_payload(
+        from_date="2025-01-01",
+        to_date="2026-04-10",
+        limit=2,
+    )
+
+    assert seen_pages == [0, 1, 2]
+    assert payload["metadata"]["query_profile"] == non_price_data.FMP_NVDA_BACKFILL_PROFILE
+    assert payload["metadata"]["query_params"]["symbols"] == "NVDA"
+    assert payload["metadata"]["pagination"]["stop_reason"] == (
+        "oldest_before_requested_start"
+    )
+    assert payload["metadata"]["coverage"]["oldest_returned"] == "2024-12-31"
+    assert payload["metadata"]["collection_complete"] is True
+    assert [article["title"] for article in payload["articles"]] == [
+        "NVIDIA March",
+        "NVIDIA February",
+        "NVIDIA data center update",
+    ]
+
+
+def test_collect_fmp_backfill_payload_stops_on_empty_page(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_fetch_fmp_stock_news(
+        ticker: str,
+        limit: int = 500,
+        page: int | None = None,
+        from_date: str | None = None,
+        to_date: str | None = None,
+    ) -> list[dict[str, object]]:
+        del ticker, limit, from_date, to_date
+        if page == 0:
+            return [
+                {
+                    "symbol": "NVDA",
+                    "publishedDate": "2025-01-02 09:30:00",
+                    "title": "NVIDIA after start",
+                    "url": "https://example.com/jan2",
+                }
+            ]
+        return []
+
+    monkeypatch.setattr(
+        non_price_data, "fetch_fmp_stock_news", fake_fetch_fmp_stock_news
+    )
+
+    payload = non_price_data.collect_fmp_backfill_payload()
+
+    assert payload["metadata"]["pagination"]["stop_reason"] == "empty_page"
+    assert payload["metadata"]["collection_complete"] is False
+    assert payload["metadata"]["pagination"]["pages"][-1]["result_count"] == 0
+
+
+def test_validate_fmp_backfill_rejects_non_nvda_symbol(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        non_price_data,
+        "fetch_fmp_stock_news",
+        lambda **kwargs: [
+            {
+                "symbol": "AAPL",
+                "publishedDate": "2025-01-02 09:30:00",
+                "title": "Wrong symbol",
+                "url": "https://example.com/aapl",
+            },
+            {
+                "symbol": "NVDA",
+                "publishedDate": "2024-12-31 09:30:00",
+                "title": "Old enough",
+                "url": "https://example.com/old",
+            },
+        ],
+    )
+    payload = non_price_data.collect_fmp_backfill_payload()
+
+    with pytest.raises(ValueError, match="non-NVDA"):
+        non_price_data.validate_complete_fmp_backfill_payload(payload)
+
+
+def test_validate_fmp_backfill_rejects_incomplete_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        non_price_data,
+        "fetch_fmp_stock_news",
+        lambda **kwargs: [
+            {
+                "symbol": "NVDA",
+                "publishedDate": "2025-01-02 09:30:00",
+                "title": "Too recent",
+                "url": "https://example.com/jan2",
+            }
+        ]
+        if kwargs["page"] == 0
+        else [],
+    )
+    payload = non_price_data.collect_fmp_backfill_payload()
+
+    with pytest.raises(ValueError, match="incomplete before the requested start"):
+        non_price_data.validate_complete_fmp_backfill_payload(payload)
+
+
+def test_collect_fmp_backfill_data_rejects_existing_raw_artifact(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    output_path = tmp_path / non_price_data.DEFAULT_FMP_BACKFILL_FILENAME
+    output_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(non_price_data, "load_dotenv", lambda: None)
+    monkeypatch.setattr(
+        non_price_data,
+        "collect_fmp_backfill_payload",
+        lambda **kwargs: pytest.fail("collector must not run when output exists"),
+    )
+
+    with pytest.raises(FileExistsError, match="Refusing to overwrite"):
+        non_price_data.collect_fmp_backfill_data(output_path=output_path)
 
 
 def test_fetch_newsapi_headlines_stops_on_maximum_results_limit(

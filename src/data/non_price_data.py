@@ -16,12 +16,16 @@ from dotenv import load_dotenv
 RAW_NEWS_DIR = Path("data/raw/news")
 DEFAULT_NEWSAPI_FILENAME = "newsapi_2026_04.json"
 DEFAULT_FMP_FILENAME = "fmp_stock_news_2026_04.json"
+DEFAULT_FMP_BACKFILL_FILENAME = "fmp_nvda_backfill_2025_2026.json"
 DEFAULT_NEWSAPI_FROM_DATE = "2026-03-25"
 DEFAULT_NEWSAPI_TO_DATE = "2026-04-10"
+DEFAULT_FMP_BACKFILL_FROM_DATE = "2025-01-01"
+DEFAULT_FMP_BACKFILL_TO_DATE = "2026-04-10"
 NEWSAPI_ENDPOINT = "https://newsapi.org/v2/everything"
 FMP_ENDPOINT = "https://financialmodelingprep.com/stable/news/stock"
 USER_AGENT = "otpptakehomeassignment/0.1"
 NEWSAPI_OVERLAP_REPAIR_PROFILE = "nvda_overlap_repair_v1"
+FMP_NVDA_BACKFILL_PROFILE = "fmp_nvda_backfill_v1"
 NEWSAPI_OVERLAP_QUERY = "NVIDIA OR NVDA"
 NEWSAPI_OVERLAP_SEARCH_IN = "title"
 NEWSAPI_OVERLAP_DOMAINS = (
@@ -181,15 +185,21 @@ def fetch_fmp_stock_news(
     ticker: str,
     limit: int = 500,
     page: int | None = None,
+    from_date: str | None = None,
+    to_date: str | None = None,
 ) -> list[dict[str, Any]]:
     api_key = load_required_api_key("FMP_KEY")
     params: dict[str, Any] = {
-        "tickers": ticker,
+        "symbols": ticker,
         "limit": limit,
         "apikey": api_key,
     }
     if page is not None:
         params["page"] = page
+    if from_date is not None:
+        params["from"] = from_date
+    if to_date is not None:
+        params["to"] = to_date
 
     payload = _request_json(f"{FMP_ENDPOINT}?{urlencode(params)}")
     if not isinstance(payload, list):
@@ -262,6 +272,26 @@ def write_json(path: Path, payload: dict[str, Any] | list[dict[str, Any]]) -> No
     finally:
         if temp_path is not None and temp_path.exists():
             temp_path.unlink()
+
+
+def write_json_immutable(
+    path: Path, payload: dict[str, Any] | list[dict[str, Any]]
+) -> None:
+    if path.exists():
+        raise FileExistsError(f"Refusing to overwrite existing raw artifact: {path}")
+    write_json(path, payload)
+
+
+def _parse_fmp_published_date(record: dict[str, Any]) -> date:
+    raw_value = record.get("publishedDate")
+    if not isinstance(raw_value, str) or not raw_value.strip():
+        raise ValueError("FMP article is missing publishedDate.")
+    timestamp = datetime.fromisoformat(raw_value.strip().replace("Z", "+00:00"))
+    return timestamp.date()
+
+
+def _date_in_range(value: date, from_date: date, to_date: date) -> bool:
+    return from_date <= value <= to_date
 
 
 def _iter_utc_day_windows(from_date: str, to_date: str) -> list[tuple[str, str, str]]:
@@ -371,6 +401,111 @@ def collect_newsapi_payload(
     )
 
 
+def collect_fmp_backfill_payload(
+    *,
+    ticker: str = "NVDA",
+    from_date: str = DEFAULT_FMP_BACKFILL_FROM_DATE,
+    to_date: str = DEFAULT_FMP_BACKFILL_TO_DATE,
+    limit: int = 250,
+    query_profile: str = FMP_NVDA_BACKFILL_PROFILE,
+    max_pages: int = 200,
+) -> dict[str, Any]:
+    requested_start = date.fromisoformat(from_date)
+    requested_end = date.fromisoformat(to_date)
+    if requested_end < requested_start:
+        raise ValueError(
+            f"Expected to_date >= from_date, got {from_date!r} to {to_date!r}."
+        )
+
+    records: list[dict[str, Any]] = []
+    page_status: list[dict[str, Any]] = []
+    oldest_returned: date | None = None
+    stop_reason = "max_pages"
+
+    for page in range(max_pages):
+        page_records = fetch_fmp_stock_news(
+            ticker=ticker,
+            limit=limit,
+            page=page,
+            from_date=from_date,
+            to_date=to_date,
+        )
+        if not page_records:
+            stop_reason = "empty_page"
+            page_status.append(
+                {
+                    "page": page,
+                    "result_count": 0,
+                    "oldest_published_date": None,
+                }
+            )
+            break
+
+        page_dates = [_parse_fmp_published_date(record) for record in page_records]
+        page_oldest = min(page_dates)
+        oldest_returned = (
+            page_oldest if oldest_returned is None else min(oldest_returned, page_oldest)
+        )
+        records.extend(page_records)
+        page_status.append(
+            {
+                "page": page,
+                "result_count": len(page_records),
+                "oldest_published_date": page_oldest.isoformat(),
+            }
+        )
+        if page_oldest < requested_start:
+            stop_reason = "oldest_before_requested_start"
+            break
+    else:
+        raise RuntimeError(
+            f"FMP pagination reached max_pages={max_pages} before covering {from_date}."
+        )
+
+    retained = [
+        record
+        for record in records
+        if _date_in_range(_parse_fmp_published_date(record), requested_start, requested_end)
+    ]
+    retained = deduplicate_articles(retained)
+    collection_complete = (
+        oldest_returned is not None and oldest_returned <= requested_start
+    )
+
+    return build_news_payload(
+        source="FMP",
+        ticker=ticker,
+        query_params={
+            "symbols": ticker,
+            "from": from_date,
+            "to": to_date,
+            "limit": limit,
+        },
+        records=retained,
+        notes=[
+            "Collected from FMP Search Stock News using the symbols parameter and paginated backward until coverage crossed the requested start date."
+        ],
+        extra_metadata={
+            "query_profile": query_profile,
+            "requested_range": {"from": from_date, "to": to_date},
+            "pagination": {
+                "strategy": "fmp_page",
+                "page_start": 0,
+                "limit": limit,
+                "pages_completed": len(page_status),
+                "stop_reason": stop_reason,
+                "pages": page_status,
+            },
+            "coverage": {
+                "oldest_returned": (
+                    oldest_returned.isoformat() if oldest_returned is not None else None
+                )
+            },
+            "collection_complete": collection_complete,
+        },
+    )
+
+
 def validate_complete_newsapi_overlap_payload(payload: dict[str, Any]) -> None:
     metadata = payload.get("metadata")
     if not isinstance(metadata, dict):
@@ -430,6 +565,100 @@ def validate_complete_newsapi_overlap_payload(payload: dict[str, Any]) -> None:
         raise ValueError("Raw NewsAPI payload query_params do not match the overlap domains.")
 
 
+def validate_complete_fmp_backfill_payload(payload: dict[str, Any]) -> None:
+    metadata = payload.get("metadata")
+    if not isinstance(metadata, dict):
+        raise ValueError("Expected raw payload metadata for FMP backfill validation.")
+    if metadata.get("source") != "FMP":
+        raise ValueError("Expected an FMP raw payload for news scoring.")
+    if metadata.get("query_profile") != FMP_NVDA_BACKFILL_PROFILE:
+        raise ValueError("Raw FMP payload is missing the expected backfill query profile.")
+
+    requested_range = metadata.get("requested_range")
+    if not isinstance(requested_range, dict):
+        raise ValueError("Raw FMP payload is missing requested_range metadata.")
+    from_date = requested_range.get("from")
+    to_date = requested_range.get("to")
+    if from_date != DEFAULT_FMP_BACKFILL_FROM_DATE:
+        raise ValueError("Raw FMP payload does not start at the expected backfill date.")
+    if to_date != DEFAULT_FMP_BACKFILL_TO_DATE:
+        raise ValueError("Raw FMP payload does not end at the expected target date.")
+
+    query_params = metadata.get("query_params")
+    if not isinstance(query_params, dict):
+        raise ValueError("Raw FMP payload is missing query_params metadata.")
+    if query_params.get("symbols") != "NVDA":
+        raise ValueError("Raw FMP payload must use symbols=NVDA.")
+    if "tickers" in query_params:
+        raise ValueError("Raw FMP payload must not use the obsolete tickers parameter.")
+
+    coverage = metadata.get("coverage")
+    if not isinstance(coverage, dict) or not isinstance(
+        coverage.get("oldest_returned"), str
+    ):
+        raise ValueError("Raw FMP payload is missing oldest_returned coverage metadata.")
+    if date.fromisoformat(coverage["oldest_returned"]) > date.fromisoformat(from_date):
+        raise ValueError("Raw FMP backfill is incomplete before the requested start date.")
+    if metadata.get("collection_complete") is not True:
+        raise ValueError("Refusing to score incomplete FMP backfill corpus.")
+
+    pagination = metadata.get("pagination")
+    if not isinstance(pagination, dict) or pagination.get("strategy") != "fmp_page":
+        raise ValueError("Raw FMP payload is missing FMP pagination metadata.")
+    pages = pagination.get("pages")
+    if not isinstance(pages, list) or not pages:
+        raise ValueError("Raw FMP payload is missing per-page pagination metadata.")
+
+    articles = payload.get("articles")
+    if not isinstance(articles, list) or not articles:
+        raise ValueError("Raw FMP payload must include at least one retained article.")
+    requested_start = date.fromisoformat(from_date)
+    requested_end = date.fromisoformat(to_date)
+    for article in articles:
+        if not isinstance(article, dict):
+            raise ValueError("Raw FMP payload contains a non-object article.")
+        if article.get("symbol") != "NVDA":
+            raise ValueError("Raw FMP payload contains a retained non-NVDA article.")
+        article_date = _parse_fmp_published_date(article)
+        if not _date_in_range(article_date, requested_start, requested_end):
+            raise ValueError("Raw FMP payload contains an out-of-range article.")
+
+
+def validate_supported_news_scoring_payload(payload: dict[str, Any]) -> str:
+    metadata = payload.get("metadata")
+    if not isinstance(metadata, dict):
+        raise ValueError("Expected raw payload metadata for news scoring.")
+    source = metadata.get("source")
+    if source == "NewsAPI":
+        validate_complete_newsapi_overlap_payload(payload)
+        return "NewsAPI"
+    if source == "FMP":
+        validate_complete_fmp_backfill_payload(payload)
+        return "FMP"
+    raise ValueError(f"Unsupported news payload source for scoring: {source!r}.")
+
+
+def normalize_fmp_article_for_scoring(article: dict[str, Any]) -> dict[str, Any]:
+    published_at = str(article.get("publishedDate") or "").strip()
+    source_name = str(article.get("publisher") or article.get("site") or "").strip()
+    text = str(article.get("text") or "").strip()
+    return {
+        "source": {"name": source_name},
+        "title": article.get("title") or "",
+        "description": text,
+        "content": text,
+        "url": article.get("url") or "",
+        "publishedAt": published_at,
+        "symbol": article.get("symbol"),
+    }
+
+
+def normalize_article_for_scoring(article: dict[str, Any], *, source: str) -> dict[str, Any]:
+    if source == "FMP":
+        return normalize_fmp_article_for_scoring(article)
+    return article
+
+
 def collect_news_data(
     newsapi_from_date: str = DEFAULT_NEWSAPI_FROM_DATE,
     newsapi_to_date: str = DEFAULT_NEWSAPI_TO_DATE,
@@ -464,7 +693,7 @@ def collect_news_data(
     fmp_payload = build_news_payload(
         source="FMP",
         ticker="NVDA",
-        query_params={"tickers": "NVDA", "limit": 500},
+        query_params={"symbols": "NVDA", "limit": 500},
         records=fmp_records,
         notes=fmp_notes,
     )
@@ -474,3 +703,20 @@ def collect_news_data(
     write_json(newsapi_path, newsapi_payload)
     write_json(fmp_path, fmp_payload)
     return {"newsapi": newsapi_path, "fmp": fmp_path}
+
+
+def collect_fmp_backfill_data(
+    *,
+    output_path: Path | None = None,
+    from_date: str = DEFAULT_FMP_BACKFILL_FROM_DATE,
+    to_date: str = DEFAULT_FMP_BACKFILL_TO_DATE,
+) -> Path:
+    load_dotenv()
+    path = output_path or RAW_NEWS_DIR / DEFAULT_FMP_BACKFILL_FILENAME
+    if path.exists():
+        raise FileExistsError(f"Refusing to overwrite existing raw artifact: {path}")
+
+    payload = collect_fmp_backfill_payload(from_date=from_date, to_date=to_date)
+    validate_complete_fmp_backfill_payload(payload)
+    write_json_immutable(path, payload)
+    return path
