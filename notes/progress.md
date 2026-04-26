@@ -166,3 +166,7 @@ Next: force-with-lease push the rebased branch and monitor PR #32 mergeability/c
 ## Day 8 (2026-04-26, 0.2h)
 Done: redeployed `demo_app/` from `feat/demo-app` to Hugging Face Space `EchoSummit/nvda-volatility-demo` at Space commit `a3c2060`, verified runtime `RUNNING`, HTTP 200 app/assets, and scene 6/7 reveal-toggle callbacks. Branch: `feat/demo-app`. W&B: N/A.
 Next: share the deployed Space URL and keep PR #32 focused on the reveal-toggle fix. Branch: `feat/demo-app`.
+
+## Day 8 (2026-04-26, 0.1h)
+Done: removed obsolete docs artifact from the repo tree. Branch: `chore/remove-obsolete-doc-artifact`. W&B: N/A.
+Next: open the docs cleanup PR after green checks. Branch: `chore/remove-obsolete-doc-artifact`.
