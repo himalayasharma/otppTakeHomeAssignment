@@ -170,3 +170,7 @@ Next: share the deployed Space URL and keep PR #32 focused on the reveal-toggle 
 ## Day 8 (2026-04-26, 0.1h)
 Done: removed obsolete docs artifact from the repo tree. Branch: `chore/remove-obsolete-doc-artifact`. W&B: N/A.
 Next: open the docs cleanup PR after green checks. Branch: `chore/remove-obsolete-doc-artifact`.
+
+## Day 8 (2026-04-26, 0.2h)
+Done: added the root hiring-reviewer `README.md`, verified referenced repo artifacts/commands plus Hugging Face HTTP 200, and kept `uv run pytest -q` plus `uv run ruff check .` green; `scripts.run_baselines --help` has no help-only path and created baseline verification run `132rt9sy`. Branch: `docs/root-readme`. W&B: `132rt9sy` (verification), `odom92h1` (referenced final ablation).
+Next: monitor PR #34 for review/merge. Branch: `docs/root-readme`.
