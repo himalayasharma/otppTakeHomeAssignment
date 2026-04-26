@@ -110,3 +110,7 @@ Next: enable paid/available Gemini quota, run the full FMP scoring command with 
 ## Day 8 (2026-04-26, 0.6h)
 Done: added W&B cost metric logging and scriptable cost-cap milestone alerts to `scripts.build_news_scores`, including resume-aware threshold handling and cost-cap breach coverage; verified `uv run pytest -q` (107 passed, 1 skipped) and `uv run ruff check .`. Branch: `feat/finbert-transcript-coverage`. W&B: N/A.
 Next: enable paid/available Gemini quota, run the FMP Gemini scoring command with `--wandb-alerts` and an explicit cost cap, then rerun the ablation only after FMP-derived news scores are complete. Branch: `feat/finbert-transcript-coverage`.
+
+## Day 8 (2026-04-26, 0.8h)
+Done: implemented bounded parallel Gemini news scoring with adaptive 429 backoff, retryable transport classification, `--max-new-articles` probe mode, deterministic final ordering, and main-thread checkpoint ownership; verified `uv run pytest -q` (111 passed, 1 skipped) and `uv run ruff check .`. Branch: `feat/gemini-parallel-news-scoring`. W&B: N/A.
+Next: run the paid-quota Gemini FMP probe with `--max-new-articles 100`, then remove the limit for the full resume run if quota/backoff behavior is stable. Branch: `feat/gemini-parallel-news-scoring`.

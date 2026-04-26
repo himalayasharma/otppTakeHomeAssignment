@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 import sys
+import threading
+import time
 
 import pandas as pd
 from pandas.api.types import is_integer_dtype
@@ -24,6 +26,7 @@ from src.llm.news_extract import (  # noqa: E402
     ArticleScoringError,
     ArticleScore,
     ClaudeExtractionPayload,
+    GeminiRateLimitError,
     aggregate_daily,
     score_article_gemini,
     score_article,
@@ -841,6 +844,209 @@ def test_builder_gemini_resume_skips_checkpointed_articles(
     assert checkpoint_path.exists()
     assert checkpoint_path.with_suffix(".jsonl").exists()
     assert "attempted=2 resumed=1 scored=2 dropped=0" in capsys.readouterr().out
+
+
+def test_builder_gemini_parallel_preserves_order_and_main_thread_checkpoints(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    input_path = tmp_path / "news.json"
+    raw_output_path = tmp_path / "news_scores_raw.parquet"
+    daily_output_path = tmp_path / "news_scores.parquet"
+    checkpoint_path = tmp_path / "checkpoint.parquet"
+    first = _article(title="First", url="https://example.com/first")
+    second = _article(title="Second", url="https://example.com/second")
+    input_path.write_text(
+        json.dumps(_complete_newsapi_payload(first, second)),
+        encoding="utf-8",
+    )
+    checkpoint_threads: list[str] = []
+    original_write_checkpoint = build_news_scores._write_checkpoint
+
+    def fake_score_article_gemini(
+        client: object,
+        article: dict[str, object],
+        *,
+        model: str,
+    ) -> ArticleScore:
+        if article["title"] == "First":
+            time.sleep(0.03)
+        published_at = pd.Timestamp(article["publishedAt"]).tz_localize(None)
+        as_of = published_at.normalize()
+        return ArticleScore(
+            published_at=published_at.to_pydatetime(),
+            as_of=as_of.to_pydatetime(),
+            url=str(article["url"]),
+            title=str(article["title"]),
+            source_name="Example News",
+            sentiment_score=0.1 if article["title"] == "First" else 0.2,
+            risk_score=0.3,
+            topic_tags=["other"],
+            input_tokens=10,
+            output_tokens=5,
+            cache_creation_input_tokens=0,
+            cache_read_input_tokens=0,
+            total_cost_usd=0.000003,
+        )
+
+    def tracked_write_checkpoint(path: Path, scores: list[ArticleScore]) -> None:
+        checkpoint_threads.append(threading.current_thread().name)
+        original_write_checkpoint(path, scores)
+
+    monkeypatch.setattr(build_news_scores, "load_dotenv", lambda: None)
+    monkeypatch.setattr(
+        build_news_scores,
+        "score_article_gemini",
+        fake_score_article_gemini,
+    )
+    monkeypatch.setattr(build_news_scores, "_write_checkpoint", tracked_write_checkpoint)
+
+    exit_code = build_news_scores.main(
+        [
+            "--provider",
+            "gemini",
+            "--input-path",
+            str(input_path),
+            "--raw-output-path",
+            str(raw_output_path),
+            "--daily-output-path",
+            str(daily_output_path),
+            "--checkpoint-path",
+            str(checkpoint_path),
+            "--concurrency",
+            "2",
+            "--requests-per-minute",
+            "60000",
+        ],
+        client=object(),
+    )
+
+    assert exit_code == 0
+    assert pd.read_parquet(raw_output_path)["title"].tolist() == ["First", "Second"]
+    assert checkpoint_threads
+    assert set(checkpoint_threads) == {"MainThread"}
+
+
+def test_builder_max_new_articles_writes_checkpoint_without_final_promotion(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    input_path = tmp_path / "news.json"
+    raw_output_path = tmp_path / "news_scores_raw.parquet"
+    daily_output_path = tmp_path / "news_scores.parquet"
+    checkpoint_path = tmp_path / "checkpoint.parquet"
+    input_path.write_text(
+        json.dumps(
+            _complete_newsapi_payload(
+                _article(title="One", url="https://example.com/one"),
+                _article(title="Two", url="https://example.com/two"),
+                _article(title="Three", url="https://example.com/three"),
+            )
+        ),
+        encoding="utf-8",
+    )
+    client = _FakeGeminiClient(
+        [_fake_gemini_response({"sentiment_score": 0.1, "risk_score": 0.2})]
+    )
+    monkeypatch.setattr(build_news_scores, "load_dotenv", lambda: None)
+
+    exit_code = build_news_scores.main(
+        [
+            "--provider",
+            "gemini",
+            "--input-path",
+            str(input_path),
+            "--raw-output-path",
+            str(raw_output_path),
+            "--daily-output-path",
+            str(daily_output_path),
+            "--checkpoint-path",
+            str(checkpoint_path),
+            "--max-new-articles",
+            "1",
+            "--concurrency",
+            "1",
+        ],
+        client=client,
+    )
+
+    assert exit_code == 0
+    assert pd.read_parquet(checkpoint_path)["title"].tolist() == ["One"]
+    assert not raw_output_path.exists()
+    assert not daily_output_path.exists()
+    assert "final outputs not promoted" in capsys.readouterr().out
+
+
+def test_adaptive_rate_limiter_halves_and_recovers_after_success_streak() -> None:
+    limiter = build_news_scores.AdaptiveRateLimiter(
+        initial_rpm=600,
+        min_rpm=60,
+        max_rpm=600,
+        clock=lambda: 0.0,
+        sleep=lambda seconds: None,
+    )
+
+    limiter.on_rate_limit()
+    assert limiter.current_rpm == pytest.approx(300)
+    for _ in range(100):
+        limiter.on_success()
+    assert limiter.current_rpm == pytest.approx(330)
+
+    for _ in range(10):
+        limiter.on_rate_limit()
+    assert limiter.current_rpm == pytest.approx(60)
+
+
+def test_builder_gemini_rate_limit_retries_stop_at_configured_limit(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    input_path = tmp_path / "news.json"
+    raw_output_path = tmp_path / "news_scores_raw.parquet"
+    daily_output_path = tmp_path / "news_scores.parquet"
+    checkpoint_path = tmp_path / "checkpoint.parquet"
+    input_path.write_text(
+        json.dumps(_complete_newsapi_payload(_article())),
+        encoding="utf-8",
+    )
+    client = _FakeGeminiClient(
+        [
+            GeminiRateLimitError("Gemini HTTP 429: quota"),
+            GeminiRateLimitError("Gemini HTTP 429: quota"),
+            GeminiRateLimitError("Gemini HTTP 429: quota"),
+        ]
+    )
+    monkeypatch.setattr(build_news_scores, "load_dotenv", lambda: None)
+
+    exit_code = build_news_scores.main(
+        [
+            "--provider",
+            "gemini",
+            "--input-path",
+            str(input_path),
+            "--raw-output-path",
+            str(raw_output_path),
+            "--daily-output-path",
+            str(daily_output_path),
+            "--checkpoint-path",
+            str(checkpoint_path),
+            "--concurrency",
+            "1",
+            "--max-retries",
+            "2",
+            "--retry-base-seconds",
+            "0",
+        ],
+        client=client,
+    )
+
+    assert exit_code == 1
+    assert len(client.calls) == 3
+    assert not raw_output_path.exists()
+    assert not daily_output_path.exists()
+    assert "Gemini HTTP 429: quota" in capsys.readouterr().out
 
 
 def test_builder_logs_cost_progress_every_configured_interval(
