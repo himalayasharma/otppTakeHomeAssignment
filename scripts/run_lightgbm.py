@@ -153,6 +153,7 @@ def _overall_summary_rows(
             "model": model_name,
             "mae": float(model_result["overall"]["mae"]),
             "qlike": float(model_result["overall"]["qlike"]),
+            "directional_accuracy": float(model_result["overall"]["directional_accuracy"]),
         }
         for model_name, model_result in results.items()
     ]
@@ -173,6 +174,7 @@ def _fold_summary_rows(
                     "n_test": int(fold_result["n_test"]),
                     "mae": float(fold_result["mae"]),
                     "qlike": float(fold_result["qlike"]),
+                    "directional_accuracy": float(fold_result["directional_accuracy"]),
                 }
             )
     return rows
@@ -201,12 +203,18 @@ def _log_results(
         run.summary[f"{model_name}/overall_qlike"] = float(
             model_result["overall"]["qlike"]
         )
+        run.summary[f"{model_name}/overall_directional_accuracy"] = float(
+            model_result["overall"]["directional_accuracy"]
+        )
         for fold_number, fold_result in enumerate(model_result["folds"], start=1):
             run.summary[f"{model_name}/fold_{fold_number}_mae"] = float(
                 fold_result["mae"]
             )
             run.summary[f"{model_name}/fold_{fold_number}_qlike"] = float(
                 fold_result["qlike"]
+            )
+            run.summary[f"{model_name}/fold_{fold_number}_directional_accuracy"] = float(
+                fold_result["directional_accuracy"]
             )
 
     if comparison_summary:
@@ -539,6 +547,9 @@ def _ablation_summary_frame(
             "feature_set": feature_set,
             "overall_mae": float(result["overall"]["mae"]),
             "overall_qlike": float(result["overall"]["qlike"]),
+            "overall_directional_accuracy": float(
+                result["overall"]["directional_accuracy"]
+            ),
         }
         for fold_number in range(1, N_FOLDS + 1):
             row[f"fold_{fold_number}_mae"] = float("nan")
@@ -551,6 +562,7 @@ def _ablation_summary_frame(
         "overall_mae",
         *[f"fold_{fold_number}_mae" for fold_number in range(1, N_FOLDS + 1)],
         "overall_qlike",
+        "overall_directional_accuracy",
     ]
     return pd.DataFrame(rows).loc[:, ordered_columns]
 
