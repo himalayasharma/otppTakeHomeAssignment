@@ -122,3 +122,7 @@ Next: rerun `uv run python -m scripts.run_lightgbm --ablation` against the compl
 ## Day 8 (2026-04-26, 0.1h)
 Done: reran four-way ablation against FMP-derived news scores — price MAE 0.016618, price+finbert 0.016759 (+0.85%), price+news 0.019453 (+17.1%), price+all 0.019465 (+17.1%); both LLM variants are honest negatives. Branch: `feat/gemini-parallel-news-scoring`. W&B: `odom92h1`.
 Next: write up ablation findings in report; both LLM signals are clear negatives vs price-only LightGBM baseline. Branch: `feat/gemini-parallel-news-scoring`.
+
+## Day 8 (2026-04-26, 0.4h)
+Done: added T+1 directional accuracy as secondary metric in `src/eval/walkforward.py` (sign(ret_lag_1) vs sign(returns), zero-return rows excluded from denominator); propagated to W&B, summary, and stdout in `scripts/run_baselines.py` and `scripts/run_lightgbm.py` (including ablation CSV column); added 3 unit tests (known signs, zero-return exclusion, graceful NaN when columns absent); 115 passed / 1 skipped. Branch: `feat/walkforward-directional-accuracy`. W&B: N/A.
+Next: Prompt 8 — charts (per-fold MAE bar chart + feature importance PNG). Branch: `feat/walkforward-directional-accuracy`.

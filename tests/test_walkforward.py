@@ -137,6 +137,80 @@ def test_walk_forward_persistence_scores_rows_with_other_feature_nans() -> None:
     )
 
 
+def _walkforward_frame_with_returns(periods: int = 60) -> pd.DataFrame:
+    index = pd.date_range("2025-01-01", periods=periods, freq="D", name="date")
+    signal = pd.Series(np.linspace(0.05, 0.35, periods), index=index, dtype="float64")
+    # Alternating returns: +0.01, -0.01, +0.01, ... so sign(ret_lag_1) != sign(returns)
+    returns = pd.Series(
+        [0.01 if i % 2 == 0 else -0.01 for i in range(periods)],
+        index=index,
+        dtype="float64",
+    )
+    return pd.DataFrame(
+        {
+            "signal": signal,
+            "realized_vol_5d": signal + 0.1,
+            "target_rv5": 2.0 * signal + 0.01,
+            "returns": returns,
+            "ret_lag_1": returns.shift(1),
+        },
+        index=index,
+    )
+
+
+def test_walk_forward_directional_accuracy_known_signs() -> None:
+    df = _walkforward_frame_with_returns(periods=60)
+    result = walk_forward(
+        df,
+        fit_fn=lambda train: lambda test: 2.0 * test["signal"] + 0.01,
+        n_folds=5,
+        test_fraction=0.30,
+    )
+
+    # Alternating returns means sign(ret_lag_1) is always opposite to sign(returns),
+    # so every non-NaN, non-zero row should be a wrong prediction → accuracy = 0.0.
+    # (ret_lag_1 is NaN on the first row of each fold chunk, excluded automatically.)
+    assert result["overall"]["directional_accuracy"] == pytest.approx(0.0, abs=1e-10)
+    for fold in result["folds"]:
+        assert 0.0 <= float(fold["directional_accuracy"]) <= 1.0 or np.isnan(
+            float(fold["directional_accuracy"])
+        )
+
+
+def test_walk_forward_directional_accuracy_excludes_zero_returns() -> None:
+    df = _walkforward_frame_with_returns(periods=60)
+    # Set some returns to exactly 0.0 in the test tail
+    test_start_idx = int(len(df) * (1.0 - 0.30))
+    tail_index = df.index[test_start_idx:]
+    df = df.copy()
+    df.loc[tail_index[::3], "returns"] = 0.0  # every 3rd test row has zero return
+
+    result = walk_forward(
+        df,
+        fit_fn=lambda train: lambda test: 2.0 * test["signal"] + 0.01,
+        n_folds=5,
+        test_fraction=0.30,
+    )
+
+    # directional_accuracy must be a finite float (zero-return rows were excluded,
+    # so denominator is nonzero as long as some non-zero returns remain in the tail)
+    dir_acc = float(result["overall"]["directional_accuracy"])
+    assert 0.0 <= dir_acc <= 1.0
+
+
+def test_walk_forward_directional_accuracy_nan_when_columns_absent() -> None:
+    df = _walkforward_frame(periods=60)  # no "returns" or "ret_lag_1" columns
+    result = walk_forward(
+        df,
+        fit_fn=lambda train: lambda test: 2.0 * test["signal"] + 0.01,
+        n_folds=5,
+        test_fraction=0.30,
+    )
+    assert np.isnan(float(result["overall"]["directional_accuracy"]))
+    for fold in result["folds"]:
+        assert np.isnan(float(fold["directional_accuracy"]))
+
+
 @pytest.mark.parametrize(
     ("y_true", "y_pred", "expected"),
     [

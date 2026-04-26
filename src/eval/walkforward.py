@@ -56,6 +56,8 @@ def walk_forward(
     folds: list[dict[str, object]] = []
     overall_true: list[pd.Series] = []
     overall_pred: list[pd.Series] = []
+    overall_actual_ret: list[pd.Series] = []
+    overall_pred_ret: list[pd.Series] = []
 
     for chunk_index in test_chunk_indexes:
         train_slice = sorted_df.loc[sorted_df.index < chunk_index[0]]
@@ -80,12 +82,33 @@ def walk_forward(
             mae = float("nan")
             qlike = float("nan")
 
+        # Directional accuracy: sign(ret_lag_1) vs sign(returns) on valid rows.
+        # ret_lag_1[t] is day t-1's return (strictly past predictor).
+        # returns[t] is the realized return on day t (the "T+1" return from t-1's view).
+        # Zero-return rows are excluded from the denominator to avoid sign ambiguity.
+        dir_acc = float("nan")
+        if (
+            len(y_true) > 0
+            and "returns" in test_df.columns
+            and "ret_lag_1" in test_df.columns
+        ):
+            actual_ret = test_df.loc[valid_rows, "returns"].astype("float64")
+            pred_ret = test_df.loc[valid_rows, "ret_lag_1"].astype("float64")
+            nonzero = actual_ret != 0.0
+            if nonzero.any():
+                dir_acc = float(
+                    (np.sign(pred_ret[nonzero]) == np.sign(actual_ret[nonzero])).mean()
+                )
+                overall_actual_ret.append(actual_ret[nonzero])
+                overall_pred_ret.append(pred_ret[nonzero])
+
         folds.append(
             {
                 "train_range": _slice_range(train_slice.index),
                 "test_range": _slice_range(raw_test_slice.index),
                 "mae": mae,
                 "qlike": qlike,
+                "directional_accuracy": dir_acc,
                 "n_train": int(len(train_df)),
                 "n_test": int(len(y_true)),
             }
@@ -100,5 +123,14 @@ def walk_forward(
         }
     else:
         overall = {"mae": float("nan"), "qlike": float("nan")}
+
+    if overall_actual_ret:
+        combined_actual_ret = pd.concat(overall_actual_ret)
+        combined_pred_ret = pd.concat(overall_pred_ret).reindex(combined_actual_ret.index)
+        overall["directional_accuracy"] = float(
+            (np.sign(combined_pred_ret) == np.sign(combined_actual_ret)).mean()
+        )
+    else:
+        overall["directional_accuracy"] = float("nan")
 
     return {"folds": folds, "overall": overall}

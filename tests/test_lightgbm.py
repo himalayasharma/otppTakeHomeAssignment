@@ -332,6 +332,7 @@ def test_main_ablation_writes_summary_csv(
         "fold_4_mae",
         "fold_5_mae",
         "overall_qlike",
+        "overall_directional_accuracy",
     ]
     assert result_df["feature_set"].tolist() == [
         "price",
