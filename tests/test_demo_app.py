@@ -155,20 +155,28 @@ def test_production_scene_is_a_roadmap_not_a_readiness_claim() -> None:
     assert "production-ready" not in text
 
 
-def test_reveal_state_callbacks_are_sticky_booleans() -> None:
+def test_reveal_state_callbacks_toggle_on_click_and_preserve_without_click() -> None:
     assert demo_app.reveal_ablation(1, False) is True
+    assert demo_app.reveal_ablation(1, True) is False
     assert demo_app.reveal_ablation(None, True) is True
+    assert demo_app.reveal_ablation(0, False) is False
     assert demo_app.reveal_importance(1, False) is True
+    assert demo_app.reveal_importance(1, True) is False
     assert demo_app.reveal_importance(None, True) is True
+    assert demo_app.reveal_importance(0, False) is False
 
 
 def test_ablation_scene_reveal_adds_llm_variant_traces() -> None:
     hidden_scene = demo_app.build_scene(5, show_llm=False)
     revealed_scene = demo_app.build_scene(5, show_llm=True)
 
+    hidden_button = _component_by_id(hidden_scene, "reveal-llm-button")
+    revealed_button = _component_by_id(revealed_scene, "reveal-llm-button")
     hidden_figure = _component_by_id(hidden_scene, "results-chart").figure
     revealed_figure = _component_by_id(revealed_scene, "results-chart").figure
 
+    assert hidden_button.children == "Reveal LLM variants"
+    assert revealed_button.children == "Hide LLM variants"
     assert len(hidden_figure.data) == 1
     assert len(revealed_figure.data) == 4
 
@@ -177,9 +185,13 @@ def test_importance_scene_reveal_adds_llm_feature_families() -> None:
     hidden_scene = demo_app.build_scene(6, show_importance=False)
     revealed_scene = demo_app.build_scene(6, show_importance=True)
 
+    hidden_button = _component_by_id(hidden_scene, "reveal-importance-button")
+    revealed_button = _component_by_id(revealed_scene, "reveal-importance-button")
     hidden_figure = _component_by_id(hidden_scene, "importance-chart").figure
     revealed_figure = _component_by_id(revealed_scene, "importance-chart").figure
 
+    assert hidden_button.children == "Reveal LLM families"
+    assert revealed_button.children == "Hide LLM families"
     assert {trace.name for trace in hidden_figure.data} == {"price"}
     assert {"finbert", "news"} <= {trace.name for trace in revealed_figure.data}
 

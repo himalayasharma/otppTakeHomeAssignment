@@ -467,7 +467,7 @@ def _scene_ablation(show_llm: bool) -> html.Section:
                 className="reveal-row",
                 children=[
                     html.Button(
-                        "Reveal LLM variants",
+                        "Hide LLM variants" if show_llm else "Reveal LLM variants",
                         id="reveal-llm-button",
                         className="secondary-button",
                         n_clicks=0,
@@ -509,7 +509,7 @@ def _scene_why_llm_lost(show_importance: bool) -> html.Section:
                 className="reveal-row",
                 children=[
                     html.Button(
-                        "Reveal LLM families",
+                        "Hide LLM families" if show_importance else "Reveal LLM families",
                         id="reveal-importance-button",
                         className="secondary-button",
                         n_clicks=0,
@@ -745,7 +745,10 @@ def reveal_ablation(
     reveal_clicks: int | None,
     already_revealed: bool | None,
 ) -> bool:
-    return bool(already_revealed) or bool(reveal_clicks)
+    current = bool(already_revealed)
+    if not reveal_clicks:
+        return current
+    return not current
 
 
 @app.callback(
@@ -758,7 +761,10 @@ def reveal_importance(
     reveal_clicks: int | None,
     already_revealed: bool | None,
 ) -> bool:
-    return bool(already_revealed) or bool(reveal_clicks)
+    current = bool(already_revealed)
+    if not reveal_clicks:
+        return current
+    return not current
 
 
 @app.callback(
