@@ -130,3 +130,11 @@ Next: Prompt 8 — charts (per-fold MAE bar chart + feature importance PNG). Bra
 ## Day 8 (2026-04-26, 0.5h)
 Done: wrote `REPORT.md` — full hiring-committee deliverable with TL;DR, methodology, baseline/ablation tables, both embedded charts, and honest limitations; all numbers cross-verified against `data/processed/ablation_results.csv` and `SPEC.md`. Branch: `docs/report`. W&B: N/A.
 Next: squash-merge PR to master; assignment complete.
+
+## Day 8 (2026-04-26, 0.8h)
+Done: added a self-contained Dash/Plotly `demo_app/` for Hugging Face Docker Spaces, copied tracked presentation snapshots into `demo_app/assets/`, aligned the feature-importance narrative to `ret_lag_1` as the top feature, and verified `uv run pytest -q`, `uv run ruff check .`, plus a local HTTP 200 smoke check. Branch: `feat/demo-app`. W&B: N/A.
+Next: deploy the contents of `demo_app/` to a Hugging Face Docker Space or open a PR with this demo-app change set. Branch: `feat/demo-app`.
+
+## Day 8 (2026-04-26, 0.2h)
+Done: merged `origin/master` into `feat/demo-app`, resolved the report/progress conflicts while preserving the demo-app artifacts, and verified `uv run pytest -q`, `uv run ruff check .`, plus a local Dash HTTP 200 smoke check on port 7861. Branch: `feat/demo-app`. W&B: N/A.
+Next: monitor PR #29 checks/review and merge once green. Branch: `feat/demo-app`.
