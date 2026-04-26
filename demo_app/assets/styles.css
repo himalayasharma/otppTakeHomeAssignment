@@ -176,6 +176,30 @@ button {
   margin-top: 10px;
 }
 
+.roadmap-grid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.roadmap-stage {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #ffffff;
+  padding: 18px;
+}
+
+.roadmap-stage h2 {
+  margin: 0 0 14px;
+  font-size: 1.15rem;
+}
+
+.roadmap-stage li {
+  color: #374151;
+  font-size: 0.98rem;
+  line-height: 1.48;
+}
+
 .callout {
   border-left: 5px solid var(--blue);
   background: var(--soft);
@@ -411,6 +435,7 @@ button {
   .scoreboard,
   .data-grid,
   .check-grid,
+  .roadmap-grid,
   .two-column,
   .wide-left,
   .close-list {

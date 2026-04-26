@@ -14,9 +14,14 @@ ASSETS_DIR = APP_DIR / "assets"
 ABLATION_RESULTS_PATH = ASSETS_DIR / "ablation_results.csv"
 FEATURE_IMPORTANCE_PATH = ASSETS_DIR / "feature_importance.csv"
 
-SCENE_COUNT = 9
+SCENE_COUNT = 10
 FEATURE_SET_ORDER = ["price", "price+finbert", "price+news", "price+all"]
 PRICE_BASELINE = "price"
+DISPLAY_MAE_DELTAS = {
+    "price+finbert": "+0.85%",
+    "price+news": "+17.1%",
+    "price+all": "+17.2%",
+}
 FOLD_LABELS = {
     0: "Overall",
     1: "Fold 1",
@@ -97,8 +102,12 @@ def _delta_sentence(df: pd.DataFrame, feature_set: str) -> str:
 
     delta = relative_mae_delta(df, feature_set)
     verb = "increases" if delta >= 0 else "reduces"
+    displayed_delta = DISPLAY_MAE_DELTAS.get(
+        feature_set,
+        f"{'+' if delta >= 0 else '-'}{abs(delta) * 100:.2f}%",
+    )
     return (
-        f"{feature_set} {verb} walk-forward volatility MAE by {abs(delta) * 100:.2f}% "
+        f"{feature_set} {verb} walk-forward volatility MAE by {displayed_delta} "
         "versus price-only LightGBM."
     )
 
@@ -228,9 +237,9 @@ def _metric_strip() -> html.Div:
         className="scoreboard",
         children=[
             _scorecard("price", "0.016618", "Best overall MAE", "winner"),
-            _scorecard("price+FinBERT", "+0.85%", "MAE increase vs price"),
-            _scorecard("price+news", "+17.1%", "MAE increase vs price"),
-            _scorecard("price+all", "+17.2%", "MAE increase vs price"),
+            _scorecard("price+FinBERT", "+0.85%", "Held-out MAE vs price"),
+            _scorecard("price+news", "+17.1%", "Held-out MAE vs price"),
+            _scorecard("price+all", "+17.2%", "Held-out MAE vs price"),
         ],
     )
 
@@ -288,6 +297,16 @@ def _fact_list(items: list[str]) -> html.Ul:
     return html.Ul(className="fact-list", children=[html.Li(item) for item in items])
 
 
+def _roadmap_stage(title: str, items: list[str]) -> html.Div:
+    return html.Div(
+        className="roadmap-stage",
+        children=[
+            html.H2(title),
+            _fact_list(items),
+        ],
+    )
+
+
 def _scene_thesis() -> html.Section:
     return html.Section(
         id="scene-thesis",
@@ -296,7 +315,7 @@ def _scene_thesis() -> html.Section:
             _scene_header(
                 "Scene 1 / 1 minute",
                 "Price-only LightGBM wins; LLM features do not reduce walk-forward MAE.",
-                "The strongest story is the disciplined evaluation process and an honest negative result.",
+                "The value is the disciplined negative result: rigorous evaluation, leakage control, and honest production judgment.",
             ),
             _metric_strip(),
             html.Div(
@@ -319,7 +338,7 @@ def _scene_problem() -> html.Section:
         children=[
             _scene_header(
                 "Scene 2 / 1 minute",
-                "The target is NVDA T+5 realized volatility.",
+                "The question is volatility error reduction, not price prediction.",
                 "Success is lower held-out MAE; the result is reported as volatility error reduction, not as a directional price claim.",
             ),
             html.Div(
@@ -356,8 +375,8 @@ def _scene_data() -> html.Section:
         children=[
             _scene_header(
                 "Scene 3 / 1 minute",
-                "The dataset combines market prices with text-derived signals.",
-                "Every input was reduced to committed snapshots before this presentation app was built.",
+                "Static snapshots make the demo reproducible.",
+                "Prices, 21 transcripts, 14,719 FMP news articles, and chart artifacts are frozen before the app starts.",
             ),
             html.Div(
                 className="data-grid",
@@ -383,8 +402,8 @@ def _scene_leakage() -> html.Section:
         children=[
             _scene_header(
                 "Scene 4 / 2 minutes",
-                "Leakage control is the core methodology.",
-                "The model never sees future rows, fitted transforms, or text events before a fold split.",
+                "Walk-forward evaluation is the credibility anchor.",
+                "Every text feature is joined strictly from the past, and every model fit stays inside its fold.",
             ),
             html.Div(
                 className="two-column wide-left",
@@ -417,8 +436,8 @@ def _scene_ladder() -> html.Section:
         children=[
             _scene_header(
                 "Scene 5 / 1 minute",
-                "The baseline was deliberately strong before adding LLM features.",
-                "That makes the negative LLM result more credible: the comparison is not against a weak strawman.",
+                "HAR-RV and LightGBM are strong comparators.",
+                "The LLM features had to beat price-only structure, not a weak persistence-only floor.",
             ),
             _baseline_ladder(),
         ],
@@ -441,8 +460,8 @@ def _scene_ablation(show_llm: bool) -> html.Section:
         children=[
             _scene_header(
                 "Scene 6 / 2 minutes",
-                "Ablation: adding LLM signals made held-out MAE worse.",
-                "Reveal the variants after anchoring the room on the price-only baseline.",
+                "Ablation: price-only MAE is 0.016618; every LLM variant is worse.",
+                "FinBERT adds +0.85% MAE, news adds +17.1%, and all text features add +17.2% versus price-only.",
             ),
             html.Div(
                 className="reveal-row",
@@ -473,9 +492,9 @@ def _scene_why_llm_lost(show_importance: bool) -> html.Section:
     )
     callout = (
         "After revealing all families, price-derived lags still dominate. "
-        "FinBERT contributes small gain, and the news features show zero gain in this artifact."
+        "FinBERT contributes limited gain, and news features are not incremental under the current coverage."
         if show_importance
-        else "Start with the price-only drivers, then reveal the LLM families to show how little incremental signal appeared."
+        else "Start with the price-only drivers, then reveal the LLM families to show that text did not add useful incremental signal."
     )
     return html.Section(
         id="scene-why-llm-lost",
@@ -483,7 +502,7 @@ def _scene_why_llm_lost(show_importance: bool) -> html.Section:
         children=[
             _scene_header(
                 "Scene 7 / 1.5 minutes",
-                "Why the LLM features lost here: sparse, late, and not incremental.",
+                "Feature importance explains why price-only won.",
                 "The result is plausible because the price-only signal already captures most short-horizon volatility structure.",
             ),
             html.Div(
@@ -514,8 +533,8 @@ def _scene_engineering() -> html.Section:
         children=[
             _scene_header(
                 "Scene 8 / 1 minute",
-                "The deliverable is built like a production artifact.",
-                "The project emphasizes lineage, immutable raw inputs, and checks that protect the evaluation contract.",
+                "The demo is reproducible and self-contained.",
+                "It emphasizes lineage, immutable raw inputs, and checks that protect the evaluation contract.",
             ),
             html.Div(
                 className="check-grid",
@@ -523,12 +542,70 @@ def _scene_engineering() -> html.Section:
                     _scorecard("Tests", "pytest", "Leakage, joins, models, artifacts"),
                     _scorecard("Lint", "ruff", "CI-friendly hygiene gate"),
                     _scorecard("Lineage", "W&B", "configs, seeds, run IDs"),
-                    _scorecard("Deploy", "Dash", "self-contained Docker Space app"),
+                    _scorecard("Demo", "Dash", "self-contained Docker Space app"),
                 ],
             ),
             html.Div(
                 className="callout",
                 children="Raw data remains immutable; this app uses presentation snapshots and contains no secrets, training job, or API dependency.",
+            ),
+        ],
+    )
+
+
+def _scene_production_scale() -> html.Section:
+    return html.Section(
+        id="scene-production-scale",
+        className="scene",
+        children=[
+            _scene_header(
+                "Scene 9 / 1 minute",
+                "How I would scale this into production.",
+                "This is the production extension: a daily batch MLOps pipeline for NVDA first, with broader coverage only after the signal earns it.",
+            ),
+            html.Div(
+                className="roadmap-grid",
+                children=[
+                    _roadmap_stage(
+                        "Ingest",
+                        [
+                            "Scheduled price, news, and transcript feeds.",
+                            "Immutable raw storage with schema checks.",
+                        ],
+                    ),
+                    _roadmap_stage(
+                        "Score",
+                        [
+                            "Async LLM/news scoring with retries and checkpoints.",
+                            "Cost caps plus provider and version logging.",
+                        ],
+                    ),
+                    _roadmap_stage(
+                        "Feature store",
+                        [
+                            "Strict-past feature materialization.",
+                            "Data contracts and point-in-time joins.",
+                        ],
+                    ),
+                    _roadmap_stage(
+                        "Train/evaluate",
+                        [
+                            "Walk-forward backtests and leakage tests.",
+                            "MAE gates, model registry, and W&B lineage.",
+                        ],
+                    ),
+                    _roadmap_stage(
+                        "Serve/monitor",
+                        [
+                            "Daily forecast artifact or API for dashboard use.",
+                            "Drift checks, missing-data alerts, and performance monitoring.",
+                        ],
+                    ),
+                ],
+            ),
+            html.Div(
+                className="callout",
+                children="The current Hugging Face app is not the production system; it is a static, auditable presentation of the completed experiment.",
             ),
         ],
     )
@@ -540,16 +617,16 @@ def _scene_close() -> html.Section:
         className="scene",
         children=[
             _scene_header(
-                "Scene 9 / 1 minute",
-                "Next week: validate the text signal before adding complexity.",
-                "The right follow-up is not a new model tournament; it is better coverage, scorer validation, and feature pruning.",
+                "Scene 10 / Q&A",
+                "Interview takeaway: rigor beats a forced AI success story.",
+                "Price-only LightGBM wins this evaluation; the project value is knowing that clearly and showing why.",
             ),
             html.Div(
                 className="close-list",
                 children=[
-                    html.Div("Longer historical news coverage", className="close-item"),
-                    html.Div("Human spot-checks for scorer calibration", className="close-item"),
-                    html.Div("Prune zero-gain LLM features before retraining", className="close-item"),
+                    html.Div("Disciplined negative result", className="close-item"),
+                    html.Div("Leakage-safe walk-forward evaluation", className="close-item"),
+                    html.Div("Production roadmap after signal validation", className="close-item"),
                 ],
             ),
             html.Details(
@@ -574,6 +651,7 @@ def build_scene(scene_index: int, show_llm: bool = False, show_importance: bool 
         lambda: _scene_ablation(show_llm),
         lambda: _scene_why_llm_lost(show_importance),
         _scene_engineering,
+        _scene_production_scale,
         _scene_close,
     ]
     bounded = max(0, min(scene_index, SCENE_COUNT - 1))
@@ -608,7 +686,7 @@ app.layout = html.Div(
                             className="progress-wrap",
                             children=[
                                 html.Div(
-                                    "1 / 9",
+                                    f"1 / {SCENE_COUNT}",
                                     id="scene-progress",
                                     className="progress-label",
                                 ),
@@ -617,7 +695,7 @@ app.layout = html.Div(
                                     children=html.Div(
                                         id="progress-fill",
                                         className="progress-fill",
-                                        style={"width": "11.111%"},
+                                        style={"width": f"{(1 / SCENE_COUNT) * 100:.3f}%"},
                                     ),
                                 ),
                             ],
