@@ -269,8 +269,13 @@ def _checkpoint_jsonl_path(checkpoint_path: Path) -> Path:
 
 
 def _article_score_from_row(row: dict[str, Any]) -> ArticleScore:
-    if not isinstance(row.get("topic_tags"), list):
-        row["topic_tags"] = list(row.get("topic_tags") or [])
+    topic_tags = row.get("topic_tags")
+    if topic_tags is None:
+        row["topic_tags"] = []
+    elif isinstance(topic_tags, list):
+        row["topic_tags"] = topic_tags
+    else:
+        row["topic_tags"] = list(topic_tags)
     return ArticleScore.model_validate(row)
 
 

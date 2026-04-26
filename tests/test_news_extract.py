@@ -846,6 +846,31 @@ def test_builder_gemini_resume_skips_checkpointed_articles(
     assert "attempted=2 resumed=1 scored=2 dropped=0" in capsys.readouterr().out
 
 
+def test_checkpoint_load_accepts_parquet_array_topic_tags(tmp_path: Path) -> None:
+    checkpoint_path = tmp_path / "checkpoint.parquet"
+    score = ArticleScore(
+        published_at=pd.Timestamp("2026-04-20T05:31:03").to_pydatetime(),
+        as_of=pd.Timestamp("2026-04-20").to_pydatetime(),
+        url="https://example.com/multi-tag",
+        title="Multi tag",
+        source_name="Example News",
+        sentiment_score=0.1,
+        risk_score=0.2,
+        topic_tags=["ai_demand", "datacenter"],
+        input_tokens=10,
+        output_tokens=5,
+        cache_creation_input_tokens=0,
+        cache_read_input_tokens=0,
+        total_cost_usd=0.000003,
+    )
+
+    build_news_scores._write_checkpoint(checkpoint_path, [score])
+
+    loaded = build_news_scores._load_checkpoint_scores(checkpoint_path)
+    assert loaded[0].topic_tags == ["ai_demand", "datacenter"]
+
+
+
 def test_builder_gemini_parallel_preserves_order_and_main_thread_checkpoints(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
