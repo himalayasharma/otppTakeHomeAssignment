@@ -126,3 +126,7 @@ Next: write up ablation findings in report; both LLM signals are clear negatives
 ## Day 8 (2026-04-26, 0.4h)
 Done: added T+1 directional accuracy as secondary metric in `src/eval/walkforward.py` (sign(ret_lag_1) vs sign(returns), zero-return rows excluded from denominator); propagated to W&B, summary, and stdout in `scripts/run_baselines.py` and `scripts/run_lightgbm.py` (including ablation CSV column); added 3 unit tests (known signs, zero-return exclusion, graceful NaN when columns absent); 115 passed / 1 skipped. Branch: `feat/walkforward-directional-accuracy`. W&B: N/A.
 Next: Prompt 8 — charts (per-fold MAE bar chart + feature importance PNG). Branch: `feat/walkforward-directional-accuracy`.
+
+## Day 8 (2026-04-26, 0.5h)
+Done: wrote `REPORT.md` — full hiring-committee deliverable with TL;DR, methodology, baseline/ablation tables, both embedded charts, and honest limitations; all numbers cross-verified against `data/processed/ablation_results.csv` and `SPEC.md`. Branch: `docs/report`. W&B: N/A.
+Next: squash-merge PR to master; assignment complete.
