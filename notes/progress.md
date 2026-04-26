@@ -146,3 +146,7 @@ Next: review the presentation flow in browser and monitor PR #30 for the deck-fo
 ## Day 8 (2026-04-26, 0.3h)
 Done: fixed the blank Dash presentation initial render by server-rendering scene 1, moving reveal state into persistent stores, and covering the default/reveal states with focused tests; verified `uv run pytest -q`, `uv run ruff check .`, and local HTTP 200/layout smoke checks on port 7862. Branch: `feat/demo-app`. W&B: N/A.
 Next: push the green `feat/demo-app` fix to PR #30 and re-check hosted deck behavior. Branch: `feat/demo-app`.
+
+## Day 8 (2026-04-26, 0.2h)
+Done: merged latest `origin/master` into `feat/demo-app`, resolved PR #30 conflicts by preserving the presentation deck over the earlier dashboard files, and verified `uv run pytest -q`, `uv run ruff check .`, plus local HTTP 200/layout smoke checks on port 7862. Branch: `feat/demo-app`. W&B: N/A.
+Next: push the conflict-resolution merge commit and confirm PR #30 is mergeable. Branch: `feat/demo-app`.
