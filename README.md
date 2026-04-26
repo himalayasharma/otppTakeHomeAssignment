@@ -1,104 +1,100 @@
-# NVDA Volatility: Honest LLM Ablation Under Walk-Forward Evaluation
+# NVDA AI-Driven Analysis — OTPP Take-Home
 
-LLM signals did not reduce NVDA 5-day realized-volatility MAE versus the price-only LightGBM baseline. The project value is the discipline around that negative result: leakage-safe walk-forward evaluation, a strong price-only baseline, reproducible experiment artifacts, transparent ablation, and a deployed demo that does not overstate what the model can do.
+End-to-end AI/analytics project on NVIDIA: data collection, LLM-based company analysis, walk-forward predictive modelling, and a deployed presentation. The headline finding is honest — LLM signals did not beat the price-only baseline — and that discipline is the point.
 
-## Reviewer Navigation
+## Exercise Requirements
 
-- Full write-up: [`REPORT.md`](REPORT.md)
-- Demo: [Hugging Face Space](https://huggingface.co/spaces/EchoSummit/nvda-volatility-demo)
-- Key charts: [`docs/charts/walkforward_mae.png`](docs/charts/walkforward_mae.png), [`docs/charts/feature_importance.png`](docs/charts/feature_importance.png)
-- Main result artifact: [`data/processed/ablation_results.csv`](data/processed/ablation_results.csv)
-- W&B lineage: baseline `uveixbx0`, FinBERT repair `p9dtlvkb`, news scoring `jbkcam2j` / `b3n6ngo2`, final ablation `odom92h1`
+| # | Requirement | What was built |
+|---|---|---|
+| 1 | **Data Collection** | Daily OHLCV via yfinance (2021–2026); 21 earnings-call transcripts (manual); 14 719 news articles via FMP; 10-K/10-Q Risk Factors + MD&A via EDGAR |
+| 2 | **Company Analysis & AI** | FinBERT sentiment on all 21 transcripts; Gemini 2.5 Flash Lite topic + sentiment scoring on 14 719 news articles (10 structured categories, resumable pipeline, $0.69 total cost) |
+| 3 | **Predictive Modelling** | Persistence → HAR-RV → LightGBM; 5-fold expanding walk-forward; MAE / QLIKE / directional-accuracy; full LLM ablation (price / +FinBERT / +news / +all) |
+| 4 | **Visualization & Presentation** | Per-fold MAE bar chart, feature importance chart, 10-scene Dash/Plotly deck [deployed on Hugging Face Spaces](https://huggingface.co/spaces/EchoSummit/nvda-volatility-demo) |
 
-## At A Glance
+**Above and beyond:** leakage-safe expanding walk-forward (no random splits), Pandera schema validation on every data loader, 112 passing regression tests including dedicated leakage guards, W&B experiment lineage for every run, and an honest negative result reported plainly rather than spun.
 
-| Feature set / baseline | Walk-forward MAE | vs. price-only LightGBM |
+## Key Result
+
+LLM features did not reduce 5-day realized-volatility MAE versus the price-only LightGBM baseline. The "adds value" bar was ≥2% reduction; none of the LLM variants cleared it.
+
+| Feature set | Walk-forward MAE | vs. price-only LightGBM |
 |---|---:|---:|
 | Persistence | 0.020326 | +22.3% |
 | HAR-RV | 0.017170 | +3.3% |
-| LightGBM price-only | 0.016618 | baseline |
+| **LightGBM price-only** | **0.016618** | **baseline** |
 | LightGBM price + FinBERT | 0.016759 | +0.85% |
 | LightGBM price + news | 0.019453 | +17.1% |
-| LightGBM price + all LLM features | 0.019465 | +17.2% |
+| LightGBM price + all LLM | 0.019465 | +17.2% |
 
-Conclusion: price features carried the result. FinBERT earnings-call sentiment was slightly negative. Gemini-scored news features degraded performance, likely because FMP historical news coverage starts in 2025 and creates sparse, shifted feature coverage across folds. This project does not make stock-direction or price claims; it measures realized-volatility MAE reduction versus baselines.
+Price features carried the result. FinBERT earnings-call sentiment was marginally negative. Gemini-scored news features degraded performance — FMP historical coverage starts in 2025, creating sparse, shifted feature coverage across folds that the model could not reliably use.
 
-## LLM Ablation
+## Reviewer Navigation
 
-Source: [`data/processed/ablation_results.csv`](data/processed/ablation_results.csv), W&B run `odom92h1`.
-
-| Feature set | Overall MAE | QLIKE | Directional acc. | Finding |
-|---|---:|---:|---:|---|
-| `price` | 0.016618 | 0.840 | 0.488 | Best model |
-| `price+finbert` | 0.016759 | 0.927 | 0.488 | Slightly worse |
-| `price+news` | 0.019453 | 1.047 | 0.488 | Materially worse |
-| `price+all` | 0.019465 | 1.116 | 0.488 | Materially worse |
-
-The "LLM adds value" bar in [`SPEC.md`](SPEC.md) is at least 2% MAE reduction versus price-only LightGBM. None of the LLM variants cleared it.
-
-## Why This Project Is Strong
-
-- Time-series correctness: expanding walk-forward split, no random train/test split.
-- Leakage prevention: strict-past features, no future fields, train-only fitting.
-- Experiment discipline: W&B run IDs, committed CSV/chart artifacts, deterministic scripts.
-- Product judgment: the negative LLM result is reported plainly instead of forced into a positive narrative.
-- Engineering breadth: data ingestion, NLP scoring, feature joins, model evaluation, charts, tests, and a deployable Dash demo.
+| Artifact | Link |
+|---|---|
+| Full write-up | [`REPORT.md`](REPORT.md) |
+| Live demo | [Hugging Face Space](https://huggingface.co/spaces/EchoSummit/nvda-volatility-demo) |
+| Ablation results | [`data/processed/ablation_results.csv`](data/processed/ablation_results.csv) |
+| Per-fold MAE chart | [`docs/charts/walkforward_mae.png`](docs/charts/walkforward_mae.png) |
+| Feature importance | [`docs/charts/feature_importance.png`](docs/charts/feature_importance.png) |
+| W&B lineage | baseline `uveixbx0` · FinBERT `p9dtlvkb` · news `jbkcam2j`/`b3n6ngo2` · ablation `odom92h1` |
 
 ## Architecture
 
 ```text
-raw prices / transcripts / news
-        -> validated loaders
-        -> strict-past feature builders
-        -> walk-forward evaluation
-        -> ablation CSV + charts + report + demo
+raw prices / transcripts / news / filings
+        → Pandera-validated loaders
+        → strict-past feature builders (no future leakage)
+        → 5-fold expanding walk-forward evaluation
+        → ablation CSV + charts + REPORT.md + Dash demo
 ```
 
-Transcripts are scored with FinBERT. News articles are scored with Gemini 2.5 Flash Lite after an FMP NVDA stock-news backfill. Price, transcript, and news features are joined only through strict-past logic before each walk-forward evaluation.
+Transcripts are scored with FinBERT (ProsusAI/finbert). News articles are scored with Gemini 2.5 Flash Lite via a resumable checkpoint pipeline. Price, transcript, and news features are joined through strict-past logic before each walk-forward fold — no fitting on test data, no look-ahead.
 
 ## Reproduce
 
 ```bash
 uv sync
-uv run pytest -q
+uv run pytest -q          # 112 tests, including leakage regression guards
 uv run ruff check .
-uv run python -m scripts.run_baselines
-uv run python -m scripts.run_lightgbm --ablation
+
+uv run python -m scripts.run_baselines               # persistence + HAR-RV
+uv run python -m scripts.run_lightgbm --ablation     # 4-way LLM ablation
 ```
 
 Run the demo locally:
 
 ```bash
 cd demo_app
-python app.py
+python app.py              # opens on http://localhost:8050
 ```
 
-The Hugging Face Docker Space serves the same app through Gunicorn; see [`demo_app/README.md`](demo_app/README.md).
+API keys required for live LLM scoring: see `.env.example`. The ablation scripts run fully offline from committed parquet artifacts without any API calls.
 
 ## Repo Map
 
-- [`src/data/`](src/data/) - validated price and non-price loaders.
-- [`src/features/`](src/features/) - price, FinBERT, and news feature builders with strict-past joins.
-- [`src/models/`](src/models/) - persistence, HAR-RV, and LightGBM model code.
-- [`src/eval/`](src/eval/) - walk-forward evaluation and metrics.
-- [`src/llm/`](src/llm/) - FinBERT and structured news scoring utilities.
-- [`scripts/`](scripts/) - reproducible data, scoring, baseline, ablation, and chart entrypoints.
-- [`tests/`](tests/) - regression coverage for leakage, feature joins, scripts, and demo behavior.
-- [`REPORT.md`](REPORT.md) - detailed final write-up.
-- [`demo_app/`](demo_app/) - self-contained Dash presentation app for Hugging Face Spaces.
+| Path | Contents |
+|---|---|
+| [`src/data/`](src/data/) | Pandera-validated price and non-price loaders |
+| [`src/features/`](src/features/) | Price, FinBERT, and news feature builders with strict-past joins |
+| [`src/models/`](src/models/) | Persistence, HAR-RV, and LightGBM model code |
+| [`src/eval/`](src/eval/) | Walk-forward evaluation, MAE/QLIKE/directional-accuracy |
+| [`src/llm/`](src/llm/) | FinBERT scorer, Gemini news extractor, transcript manifest |
+| [`scripts/`](scripts/) | Reproducible data, scoring, baseline, ablation, and chart entrypoints |
+| [`tests/`](tests/) | 112 regression tests: leakage, feature joins, scripts, demo |
+| [`REPORT.md`](REPORT.md) | Detailed final write-up |
+| [`demo_app/`](demo_app/) | Self-contained Dash presentation app (Hugging Face Spaces / Docker) |
 
 ## Limitations
 
 - Single-stock NVDA study; results may not generalize across equities or regimes.
-- FMP news starts in 2025, while the price window starts in 2021, producing uneven news feature coverage across folds.
-- Gemini scoring was not human-validated on a labeled article subset.
-- LightGBM used sane defaults, with no broad hyperparameter search.
-- Directional accuracy is a naive secondary baseline, not a model-direction forecast.
+- FMP news backfill starts 2025-01; walk-forward folds spanning 2021–2024 have no news features, which likely explains the news degradation more than LLM quality.
+- Gemini scoring was not human-validated on a labeled article subset — sentiment and topic labels are unverified.
+- LightGBM used sane defaults; no broad hyperparameter search was run.
+- Directional accuracy (0.488) is a naive secondary metric, not a model-direction forecast.
 
 ## What I Would Do Next
 
-These are scoped follow-ups outside the current take-home budget:
-
-1. Extend historical news coverage back to 2021 so all walk-forward folds have comparable train/test feature density.
-2. Validate LLM scoring quality on a labeled subset of articles before interpreting topic or sentiment features.
-3. Use SHAP and feature pruning after consistent news coverage exists, so noisy LLM columns can be removed before re-running the ablation.
+1. Extend historical news coverage to 2021 so all walk-forward folds have comparable feature density before re-running the LLM ablation.
+2. Validate LLM scoring quality on a labeled article subset to separate data-sparsity effects from genuine signal absence.
+3. Apply SHAP-based feature pruning after consistent news coverage exists, then re-run ablation with only high-information LLM columns retained.
