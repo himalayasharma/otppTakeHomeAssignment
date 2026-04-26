@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import argparse
+from collections.abc import Callable
+from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from dataclasses import dataclass
 import json
 import logging
 import os
 from pathlib import Path
 import subprocess
 import tempfile
+import threading
+import time
 from typing import Any
 import warnings
 from datetime import datetime
@@ -29,6 +34,8 @@ from src.llm.news_extract import (
     ArticleScoringError,
     ArticleScore,
     GeminiRESTClient,
+    GeminiRateLimitError,
+    GeminiRetryableError,
     aggregate_daily,
     article_resume_key,
     score_article,
@@ -51,6 +58,12 @@ DEFAULT_MAX_DROP_RATE = 0.01
 DEFAULT_COST_LOG_EVERY = 100
 DEFAULT_COST_ALERT_FRACTIONS = "0.50,0.75,0.90,1.00"
 CHECKPOINT_EVERY = 50
+DEFAULT_CONCURRENCY = 16
+DEFAULT_REQUESTS_PER_MINUTE = 600.0
+DEFAULT_MIN_REQUESTS_PER_MINUTE = 60.0
+DEFAULT_MAX_RETRIES = 5
+DEFAULT_RETRY_BASE_SECONDS = 2.0
+DEFAULT_RETRY_MAX_SECONDS = 60.0
 WANDB_PROJECT = "otpp-nvda"
 LOGGER = logging.getLogger(__name__)
 
@@ -85,6 +98,29 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         type=str,
         default=DEFAULT_COST_ALERT_FRACTIONS,
     )
+    parser.add_argument("--concurrency", type=int, default=DEFAULT_CONCURRENCY)
+    parser.add_argument(
+        "--requests-per-minute",
+        type=float,
+        default=DEFAULT_REQUESTS_PER_MINUTE,
+    )
+    parser.add_argument(
+        "--min-requests-per-minute",
+        type=float,
+        default=DEFAULT_MIN_REQUESTS_PER_MINUTE,
+    )
+    parser.add_argument("--max-retries", type=int, default=DEFAULT_MAX_RETRIES)
+    parser.add_argument(
+        "--retry-base-seconds",
+        type=float,
+        default=DEFAULT_RETRY_BASE_SECONDS,
+    )
+    parser.add_argument(
+        "--retry-max-seconds",
+        type=float,
+        default=DEFAULT_RETRY_MAX_SECONDS,
+    )
+    parser.add_argument("--max-new-articles", type=int, default=None)
     return parser.parse_args(argv)
 
 
@@ -272,6 +308,135 @@ def _write_checkpoint(checkpoint_path: Path, scores: list[ArticleScore]) -> None
     _write_parquet_atomic(checkpoint_path, _raw_scores_frame(scores))
 
 
+def _ordered_scores(
+    scores: list[ArticleScore],
+    articles: list[dict[str, Any]],
+) -> list[ArticleScore]:
+    order = {article_resume_key(article): index for index, article in enumerate(articles)}
+    return sorted(
+        scores,
+        key=lambda score: (
+            order.get(score_resume_key(score), len(order)),
+            score_resume_key(score),
+        ),
+    )
+
+
+class AdaptiveRateLimiter:
+    def __init__(
+        self,
+        *,
+        initial_rpm: float,
+        min_rpm: float,
+        max_rpm: float,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
+    ) -> None:
+        if initial_rpm <= 0:
+            raise ValueError("requests-per-minute must be positive.")
+        if min_rpm <= 0:
+            raise ValueError("min-requests-per-minute must be positive.")
+        if max_rpm < min_rpm:
+            raise ValueError("requests-per-minute must be >= min-requests-per-minute.")
+        self._min_rpm = float(min_rpm)
+        self._max_rpm = float(max_rpm)
+        self._rpm = min(max(float(initial_rpm), self._min_rpm), self._max_rpm)
+        self._clock = clock
+        self._sleep = sleep
+        self._lock = threading.Lock()
+        self._next_allowed_at = 0.0
+        self._success_streak = 0
+
+    @property
+    def current_rpm(self) -> float:
+        with self._lock:
+            return self._rpm
+
+    def wait_for_slot(self) -> None:
+        while True:
+            with self._lock:
+                now = self._clock()
+                wait_seconds = self._next_allowed_at - now
+                if wait_seconds <= 0:
+                    self._next_allowed_at = now + 60.0 / self._rpm
+                    return
+            self._sleep(wait_seconds)
+
+    def on_rate_limit(self) -> None:
+        with self._lock:
+            self._rpm = max(self._min_rpm, self._rpm / 2.0)
+            self._success_streak = 0
+
+    def on_success(self) -> None:
+        with self._lock:
+            self._success_streak += 1
+            if self._success_streak >= 100:
+                self._rpm = min(self._max_rpm, self._rpm * 1.10)
+                self._success_streak = 0
+
+
+@dataclass(frozen=True)
+class _PendingArticle:
+    index: int
+    article: dict[str, Any]
+
+
+def _retry_sleep_seconds(
+    *,
+    retry_index: int,
+    base_seconds: float,
+    max_seconds: float,
+) -> float:
+    if base_seconds <= 0 or max_seconds <= 0:
+        return 0.0
+    return min(max_seconds, base_seconds * (2 ** max(retry_index - 1, 0)))
+
+
+def _score_gemini_with_retries(
+    *,
+    client: Any,
+    article: dict[str, Any],
+    model: str,
+    limiter: AdaptiveRateLimiter,
+    max_retries: int,
+    retry_base_seconds: float,
+    retry_max_seconds: float,
+    sleep: Callable[[float], None] = time.sleep,
+) -> ArticleScore:
+    retry_count = 0
+    while True:
+        limiter.wait_for_slot()
+        try:
+            score = score_article_gemini(client, article, model=model)
+        except GeminiRateLimitError:
+            limiter.on_rate_limit()
+            retry_count += 1
+            if retry_count > max_retries:
+                raise
+            sleep(
+                _retry_sleep_seconds(
+                    retry_index=retry_count,
+                    base_seconds=retry_base_seconds,
+                    max_seconds=retry_max_seconds,
+                )
+            )
+            continue
+        except GeminiRetryableError:
+            retry_count += 1
+            if retry_count > max_retries:
+                raise
+            sleep(
+                _retry_sleep_seconds(
+                    retry_index=retry_count,
+                    base_seconds=retry_base_seconds,
+                    max_seconds=retry_max_seconds,
+                )
+            )
+            continue
+        limiter.on_success()
+        return score
+
+
 def _cost_fraction(total_cost_usd: float, cost_cap_usd: float) -> float:
     if cost_cap_usd > 0:
         return float(total_cost_usd / cost_cap_usd)
@@ -421,6 +586,51 @@ def _score_one(
     raise ValueError(f"Unsupported provider: {provider!r}")
 
 
+def _pending_articles(
+    articles: list[dict[str, Any]],
+    completed_keys: set[tuple[str, str, str]],
+    max_new_articles: int | None,
+) -> tuple[list[_PendingArticle], int]:
+    all_pending = [
+        _PendingArticle(index=index, article=article)
+        for index, article in enumerate(articles)
+        if article_resume_key(article) not in completed_keys
+    ]
+    if max_new_articles is None:
+        return all_pending, len(all_pending)
+    if max_new_articles < 0:
+        raise ValueError("max-new-articles must be non-negative.")
+    return all_pending[:max_new_articles], len(all_pending)
+
+
+def _submit_next_gemini(
+    *,
+    executor: ThreadPoolExecutor,
+    pending: list[_PendingArticle],
+    next_index: int,
+    futures: dict[Future[ArticleScore], _PendingArticle],
+    client: Any,
+    model: str,
+    limiter: AdaptiveRateLimiter,
+    args: argparse.Namespace,
+) -> int:
+    while next_index < len(pending) and len(futures) < args.concurrency:
+        item = pending[next_index]
+        future = executor.submit(
+            _score_gemini_with_retries,
+            client=client,
+            article=item.article,
+            model=model,
+            limiter=limiter,
+            max_retries=args.max_retries,
+            retry_base_seconds=args.retry_base_seconds,
+            retry_max_seconds=args.retry_max_seconds,
+        )
+        futures[future] = item
+        next_index += 1
+    return next_index
+
+
 def _default_model(provider: str) -> str:
     if provider == "anthropic":
         return MODEL_NAME
@@ -445,6 +655,22 @@ def main(argv: list[str] | None = None, *, client: Any | None = None) -> int:
     checkpoint_path = args.checkpoint_path or _default_checkpoint_path(args.provider)
     try:
         alert_fractions = _parse_cost_alert_fractions(args.cost_alert_fractions)
+        if args.concurrency <= 0:
+            raise ValueError("concurrency must be positive.")
+        if args.max_retries < 0:
+            raise ValueError("max-retries must be non-negative.")
+        if args.retry_base_seconds < 0 or args.retry_max_seconds < 0:
+            raise ValueError("retry delays must be non-negative.")
+        if args.requests_per_minute <= 0:
+            raise ValueError("requests-per-minute must be positive.")
+        if args.min_requests_per_minute <= 0:
+            raise ValueError("min-requests-per-minute must be positive.")
+        if args.requests_per_minute < args.min_requests_per_minute:
+            raise ValueError(
+                "requests-per-minute must be >= min-requests-per-minute."
+            )
+        if args.max_new_articles is not None and args.max_new_articles < 0:
+            raise ValueError("max-new-articles must be non-negative.")
     except ValueError as exc:
         print(str(exc))
         return 1
@@ -476,6 +702,13 @@ def main(argv: list[str] | None = None, *, client: Any | None = None) -> int:
         "max_drop_rate": float(args.max_drop_rate),
         "cost_log_every": int(args.cost_log_every),
         "cost_alert_fractions": list(alert_fractions),
+        "concurrency": int(args.concurrency),
+        "requests_per_minute": float(args.requests_per_minute),
+        "min_requests_per_minute": float(args.min_requests_per_minute),
+        "max_retries": int(args.max_retries),
+        "retry_base_seconds": float(args.retry_base_seconds),
+        "retry_max_seconds": float(args.retry_max_seconds),
+        "max_new_articles": args.max_new_articles,
         "git_commit": _git_commit(),
         "article_count": int(len(articles)),
     }
@@ -499,10 +732,10 @@ def main(argv: list[str] | None = None, *, client: Any | None = None) -> int:
 
         initial_cost_usd = float(initial_metrics["news_scoring/estimated_cost_usd"])
         if initial_cost_usd >= args.cost_cap_usd:
-            _write_checkpoint(checkpoint_path, scores)
+            _write_checkpoint(checkpoint_path, _ordered_scores(scores, articles))
             metrics = _log_cost_metrics(
                 run,
-                scores=scores,
+                scores=_ordered_scores(scores, articles),
                 article_count=len(articles),
                 dropped=dropped_during_run,
                 cost_cap_usd=args.cost_cap_usd,
@@ -531,46 +764,31 @@ def main(argv: list[str] | None = None, *, client: Any | None = None) -> int:
         else:
             scoring_client = client
 
+        try:
+            pending, total_pending_before_limit = _pending_articles(
+                articles,
+                completed_keys,
+                args.max_new_articles,
+            )
+        except ValueError as exc:
+            print(str(exc))
+            return 1
+
         processed_since_checkpoint = 0
         newly_scored = 0
-        for article in articles:
-            if article_resume_key(article) in completed_keys:
-                continue
-            try:
-                score = _score_one(
-                    provider=args.provider,
-                    client=scoring_client,
-                    article=article,
-                    model=model,
-                )
-            except ArticleParseError:
-                dropped_during_run += 1
-                LOGGER.warning(
-                    "Dropping article after parse failure: url=%s title=%s",
-                    article.get("url") or "",
-                    article.get("title") or "",
-                )
-                continue
-            except ArticleScoringError as exc:
-                _write_checkpoint(checkpoint_path, scores)
-                _log_cost_metrics(
-                    run,
-                    scores=scores,
-                    article_count=len(articles),
-                    dropped=dropped_during_run,
-                    cost_cap_usd=args.cost_cap_usd,
-                )
-                print(str(exc))
-                return 1
+
+        def handle_score(score: ArticleScore) -> int | None:
+            nonlocal processed_since_checkpoint, newly_scored
             scores.append(score)
             completed_keys.add(score_resume_key(score))
             _append_checkpoint_jsonl(checkpoint_path, score)
             processed_since_checkpoint += 1
             newly_scored += 1
 
+            ordered = _ordered_scores(scores, articles)
             _maybe_log_cost_progress(
                 run,
-                scores=scores,
+                scores=ordered,
                 article_count=len(articles),
                 dropped=dropped_during_run,
                 cost_cap_usd=args.cost_cap_usd,
@@ -584,10 +802,10 @@ def main(argv: list[str] | None = None, *, client: Any | None = None) -> int:
 
             total_cost_usd = float(sum(item.total_cost_usd for item in scores))
             if total_cost_usd >= args.cost_cap_usd:
-                _write_checkpoint(checkpoint_path, scores)
+                _write_checkpoint(checkpoint_path, ordered)
                 metrics = _log_cost_metrics(
                     run,
-                    scores=scores,
+                    scores=ordered,
                     article_count=len(articles),
                     dropped=dropped_during_run,
                     cost_cap_usd=args.cost_cap_usd,
@@ -608,17 +826,138 @@ def main(argv: list[str] | None = None, *, client: Any | None = None) -> int:
                 )
                 return 1
             if processed_since_checkpoint >= CHECKPOINT_EVERY:
-                _write_checkpoint(checkpoint_path, scores)
+                _write_checkpoint(checkpoint_path, ordered)
                 processed_since_checkpoint = 0
+            return None
+
+        def handle_parse_drop(article: dict[str, Any]) -> None:
+            nonlocal dropped_during_run
+            dropped_during_run += 1
+            LOGGER.warning(
+                "Dropping article after parse failure: url=%s title=%s",
+                article.get("url") or "",
+                article.get("title") or "",
+            )
+
+        if args.provider == "gemini":
+            limiter = AdaptiveRateLimiter(
+                initial_rpm=args.requests_per_minute,
+                min_rpm=args.min_requests_per_minute,
+                max_rpm=args.requests_per_minute,
+            )
+            futures: dict[Future[ArticleScore], _PendingArticle] = {}
+            next_index = 0
+            fatal_error: Exception | None = None
+            with ThreadPoolExecutor(max_workers=args.concurrency) as executor:
+                next_index = _submit_next_gemini(
+                    executor=executor,
+                    pending=pending,
+                    next_index=next_index,
+                    futures=futures,
+                    client=scoring_client,
+                    model=model,
+                    limiter=limiter,
+                    args=args,
+                )
+                while futures:
+                    done, _not_done = wait(
+                        futures,
+                        return_when=FIRST_COMPLETED,
+                    )
+                    should_stop = False
+                    for future in done:
+                        item = futures.pop(future)
+                        try:
+                            score = future.result()
+                        except ArticleParseError:
+                            handle_parse_drop(item.article)
+                        except (
+                            ArticleScoringError,
+                            GeminiRetryableError,
+                        ) as exc:
+                            fatal_error = exc
+                            should_stop = True
+                            break
+                        exit_code = handle_score(score)
+                        if exit_code is not None:
+                            should_stop = True
+                            break
+
+                    if should_stop:
+                        for future in futures:
+                            future.cancel()
+                        executor.shutdown(wait=True, cancel_futures=True)
+                        break
+
+                    next_index = _submit_next_gemini(
+                        executor=executor,
+                        pending=pending,
+                        next_index=next_index,
+                        futures=futures,
+                        client=scoring_client,
+                        model=model,
+                        limiter=limiter,
+                        args=args,
+                    )
+
+            if fatal_error is not None:
+                ordered = _ordered_scores(scores, articles)
+                _write_checkpoint(checkpoint_path, ordered)
+                _log_cost_metrics(
+                    run,
+                    scores=ordered,
+                    article_count=len(articles),
+                    dropped=dropped_during_run,
+                    cost_cap_usd=args.cost_cap_usd,
+                )
+                print(str(fatal_error))
+                return 1
+
+            total_cost_usd = float(sum(item.total_cost_usd for item in scores))
+            if total_cost_usd >= args.cost_cap_usd:
+                return 1
+        else:
+            for item in pending:
+                article = item.article
+                try:
+                    score = _score_one(
+                        provider=args.provider,
+                        client=scoring_client,
+                        article=article,
+                        model=model,
+                    )
+                except ArticleParseError:
+                    handle_parse_drop(article)
+                    continue
+                except ArticleScoringError as exc:
+                    ordered = _ordered_scores(scores, articles)
+                    _write_checkpoint(checkpoint_path, ordered)
+                    _log_cost_metrics(
+                        run,
+                        scores=ordered,
+                        article_count=len(articles),
+                        dropped=dropped_during_run,
+                        cost_cap_usd=args.cost_cap_usd,
+                    )
+                    print(str(exc))
+                    return 1
+                exit_code = handle_score(score)
+                if exit_code is not None:
+                    return exit_code
 
         attempted = len(articles)
-        scored = len(scores)
-        dropped = attempted - scored
-        total_cost_usd = float(sum(score.total_cost_usd for score in scores))
+        ordered_scores = _ordered_scores(scores, articles)
+        scored = len(ordered_scores)
+        dropped = dropped_during_run
+        total_cost_usd = float(sum(score.total_cost_usd for score in ordered_scores))
+        max_new_limited = (
+            args.max_new_articles is not None
+            and args.max_new_articles < total_pending_before_limit
+        )
 
         _log_cost_metrics(
             run,
-            scores=scores,
+            scores=ordered_scores,
             article_count=len(articles),
             dropped=dropped,
             cost_cap_usd=args.cost_cap_usd,
@@ -634,10 +973,10 @@ def main(argv: list[str] | None = None, *, client: Any | None = None) -> int:
             print("No articles were scored successfully.")
             return 1
         if total_cost_usd >= args.cost_cap_usd:
-            _write_checkpoint(checkpoint_path, scores)
+            _write_checkpoint(checkpoint_path, ordered_scores)
             if args.wandb_alerts and 1.0 not in alerted_fractions:
                 metrics = _cost_metrics(
-                    scores=scores,
+                    scores=ordered_scores,
                     article_count=len(articles),
                     dropped=dropped,
                     cost_cap_usd=args.cost_cap_usd,
@@ -658,16 +997,25 @@ def main(argv: list[str] | None = None, *, client: Any | None = None) -> int:
             return 1
         drop_rate = dropped / attempted if attempted else 0.0
         if drop_rate > args.max_drop_rate:
-            _write_checkpoint(checkpoint_path, scores)
+            _write_checkpoint(checkpoint_path, ordered_scores)
             print(
                 f"Drop-rate guardrail breached: drop_rate={drop_rate:.6f} "
                 f"> max_drop_rate={args.max_drop_rate:.6f}"
             )
             return 1
 
-        raw_df = _raw_scores_frame(scores)
-        daily_df = aggregate_daily(scores)
-        _write_checkpoint(checkpoint_path, scores)
+        _write_checkpoint(checkpoint_path, ordered_scores)
+        complete = scored + dropped >= attempted
+        if max_new_limited and not complete:
+            print(
+                f"Reached max_new_articles={args.max_new_articles}; "
+                f"remaining={attempted - scored - dropped}. "
+                f"Checkpoint written to {checkpoint_path}; final outputs not promoted."
+            )
+            return 0
+
+        raw_df = _raw_scores_frame(ordered_scores)
+        daily_df = aggregate_daily(ordered_scores)
         _write_parquet_atomic(args.raw_output_path, raw_df)
         _write_parquet_atomic(args.daily_output_path, daily_df)
 

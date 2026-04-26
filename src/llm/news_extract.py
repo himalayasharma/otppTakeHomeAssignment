@@ -118,6 +118,18 @@ class ArticleScoringError(RuntimeError):
     """Raised when scoring should stop instead of dropping an article."""
 
 
+class GeminiRetryableError(RuntimeError):
+    """Raised for Gemini transport/API failures that should be retried."""
+
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+
+
+class GeminiRateLimitError(GeminiRetryableError):
+    """Raised for Gemini HTTP 429 responses."""
+
+
 class ClaudeExtractionPayload(BaseModel):
     sentiment_score: float = Field(ge=-1.0, le=1.0)
     risk_score: float = Field(ge=0.0, le=1.0)
@@ -329,11 +341,16 @@ class GeminiRESTClient:
                 return json.loads(response.read().decode("utf-8"))
         except HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
+            message = f"Gemini HTTP {exc.code}: {detail}"
+            if exc.code == 429:
+                raise GeminiRateLimitError(message, status_code=exc.code) from exc
+            if exc.code in {408, 500, 502, 503, 504}:
+                raise GeminiRetryableError(message, status_code=exc.code) from exc
             if 400 <= exc.code < 500:
-                raise ArticleScoringError(f"Gemini HTTP {exc.code}: {detail}") from exc
-            raise RuntimeError(f"Gemini HTTP {exc.code}: {detail}") from exc
+                raise ArticleScoringError(message) from exc
+            raise GeminiRetryableError(message, status_code=exc.code) from exc
         except URLError as exc:
-            raise RuntimeError(f"Gemini network error: {exc.reason}") from exc
+            raise GeminiRetryableError(f"Gemini network error: {exc.reason}") from exc
 
 
 def _gemini_response_text(response: dict[str, Any]) -> str:
@@ -391,7 +408,7 @@ def score_article_gemini(
                 response_json_schema=response_schema,
             )
             payload = _gemini_payload_from_response(response)
-        except ArticleScoringError:
+        except (ArticleScoringError, GeminiRetryableError):
             raise
         except (
             ArticleParseError,
