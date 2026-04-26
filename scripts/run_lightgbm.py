@@ -13,6 +13,7 @@ import numpy as np
 import pandas as pd
 import wandb
 from dotenv import load_dotenv
+from lightgbm import LGBMRegressor
 
 from src.data.loader import load_prices
 from src.eval.walkforward import walk_forward
@@ -36,6 +37,7 @@ HAR_REFERENCE_MAE = 0.017170
 WANDB_PROJECT = "otpp-nvda"
 SEED = 0
 ABLATION_RESULTS_PATH = Path("data/processed/ablation_results.csv")
+FEATURE_IMPORTANCE_PATH = Path("data/processed/feature_importance.csv")
 FEATURE_SET_ORDER = ["price", "price+finbert", "price+news", "price+all"]
 PRICE_ONLY_FEATURE_COLUMNS = ["realized_vol_5d", *PRICE_FEATURE_COLUMNS]
 PRICE_FINBERT_FEATURE_COLUMNS = [*PRICE_ONLY_FEATURE_COLUMNS, *FINBERT_FEATURE_COLUMNS]
@@ -346,6 +348,39 @@ def _valid_row_mask(dataset: pd.DataFrame, feature_cols: list[str]) -> pd.Series
     for column in feature_cols:
         valid_rows &= dataset[column].notna()
     return valid_rows
+
+
+def _save_feature_importance(
+    dataset: pd.DataFrame,
+    feature_cols: list[str],
+    seed: int,
+) -> None:
+    valid_rows = _valid_row_mask(dataset, feature_cols)
+    train_df = dataset.loc[valid_rows]
+    model = LGBMRegressor(
+        objective="regression_l1",
+        num_leaves=31,
+        learning_rate=0.05,
+        n_estimators=300,
+        min_data_in_leaf=20,
+        feature_fraction=0.9,
+        bagging_fraction=0.9,
+        bagging_freq=5,
+        verbose=-1,
+        deterministic=True,
+        force_col_wise=True,
+        random_state=seed,
+    )
+    model.fit(train_df[feature_cols], train_df[TARGET_COL].astype("float64"))
+    gains = model.booster_.feature_importance(importance_type="gain")
+    names = model.booster_.feature_name()
+    importance_df = (
+        pd.DataFrame({"feature": names, "gain": gains})
+        .sort_values("gain", ascending=False)
+        .reset_index(drop=True)
+    )
+    FEATURE_IMPORTANCE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    importance_df.to_csv(FEATURE_IMPORTANCE_PATH, index=False)
 
 
 def _price_date_range(dataset: pd.DataFrame) -> tuple[str, str]:
@@ -672,6 +707,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 return 1
             _write_ablation_summary(ablation_summary)
+            _save_feature_importance(datasets["price+all"], PRICE_ALL_FEATURE_COLUMNS, SEED)
             run.log({"lightgbm/ablation_summary": wandb.Table(dataframe=ablation_summary)})
         elif args.features != "price":
             comparison_summary = _comparison_summary(
