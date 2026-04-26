@@ -870,6 +870,7 @@ def test_checkpoint_load_accepts_parquet_array_topic_tags(tmp_path: Path) -> Non
     assert loaded[0].topic_tags == ["ai_demand", "datacenter"]
 
 
+
 def test_builder_gemini_parallel_preserves_order_and_main_thread_checkpoints(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
