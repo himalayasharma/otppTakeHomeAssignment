@@ -92,13 +92,13 @@ def test_initial_layout_renders_first_scene_and_progress() -> None:
     next_button = _component_by_id(layout, "next-scene")
 
     assert scene_content.children.id == "scene-thesis"
-    assert progress.children == "1 / 9"
-    assert progress_fill.style["width"] == "11.111%"
+    assert progress.children == "1 / 10"
+    assert progress_fill.style["width"] == "10.000%"
     assert previous_button.disabled is True
     assert next_button.disabled is False
 
 
-def test_presentation_deck_builds_all_nine_scenes() -> None:
+def test_presentation_deck_builds_all_ten_scenes() -> None:
     scene_ids = {
         demo_app.build_scene(scene_index).id
         for scene_index in range(demo_app.SCENE_COUNT)
@@ -113,6 +113,7 @@ def test_presentation_deck_builds_all_nine_scenes() -> None:
         "scene-ablation",
         "scene-why-llm-lost",
         "scene-engineering-quality",
+        "scene-production-scale",
         "scene-close",
     }
 
@@ -123,20 +124,35 @@ def test_render_scene_returns_progress_and_navigation_state() -> None:
     )
 
     assert scene.id == "scene-thesis"
-    assert progress == "1 / 9"
-    assert progress_style["width"] == "11.111%"
+    assert progress == "1 / 10"
+    assert progress_style["width"] == "10.000%"
     assert previous_disabled is True
     assert next_disabled is False
 
     _, progress, _, previous_disabled, next_disabled = demo_app.render_scene(
-        8,
+        9,
         True,
         True,
     )
 
-    assert progress == "9 / 9"
+    assert progress == "10 / 10"
     assert previous_disabled is False
     assert next_disabled is True
+
+
+def test_production_scene_is_a_roadmap_not_a_readiness_claim() -> None:
+    scene = demo_app.build_scene(8)
+    text = " ".join(
+        str(getattr(component, "children", ""))
+        for component in _walk_components(scene)
+        if isinstance(getattr(component, "children", None), str)
+    )
+
+    assert scene.id == "scene-production-scale"
+    assert "production extension" in text
+    assert "daily batch MLOps pipeline" in text
+    assert "not the production system" in text
+    assert "production-ready" not in text
 
 
 def test_reveal_state_callbacks_are_sticky_booleans() -> None:

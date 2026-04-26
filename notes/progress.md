@@ -150,3 +150,7 @@ Next: push the green `feat/demo-app` fix to PR #30 and re-check hosted deck beha
 ## Day 8 (2026-04-26, 0.2h)
 Done: merged latest `origin/master` into `feat/demo-app`, resolved PR #30 conflicts by preserving the presentation deck over the earlier dashboard files, and verified `uv run pytest -q`, `uv run ruff check .`, plus local HTTP 200/layout smoke checks on port 7862. Branch: `feat/demo-app`. W&B: N/A.
 Next: push the conflict-resolution merge commit and confirm PR #30 is mergeable. Branch: `feat/demo-app`.
+
+## Day 8 (2026-04-26, 0.4h)
+Done: updated `demo_app/` to a 10-scene executive deck with a production-roadmap slide, refreshed tests, and verified `uv run pytest -q`, `uv run ruff check .`, plus a local Dash HTTP/layout smoke check on port 7863. Branch: `feat/demo-app`. W&B: N/A.
+Next: push the green deck update to PR #30 or redeploy the Hugging Face Space from this branch. Branch: `feat/demo-app`.
