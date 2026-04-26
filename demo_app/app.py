@@ -584,25 +584,51 @@ app.layout = html.Div(
     className="page",
     children=[
         dcc.Store(id="current-scene", data=0),
+        dcc.Store(id="ablation-revealed", data=False),
+        dcc.Store(id="importance-revealed", data=False),
         html.Main(
             className="deck-shell",
             children=[
-                html.Div(id="scene-content", className="scene-content"),
+                html.Div(
+                    id="scene-content",
+                    className="scene-content",
+                    children=build_scene(0),
+                ),
                 html.Footer(
                     className="deck-nav",
                     children=[
-                        html.Button("Previous", id="prev-scene", className="nav-button", n_clicks=0),
+                        html.Button(
+                            "Previous",
+                            id="prev-scene",
+                            className="nav-button",
+                            n_clicks=0,
+                            disabled=True,
+                        ),
                         html.Div(
                             className="progress-wrap",
                             children=[
-                                html.Div(id="scene-progress", className="progress-label"),
+                                html.Div(
+                                    "1 / 9",
+                                    id="scene-progress",
+                                    className="progress-label",
+                                ),
                                 html.Div(
                                     className="progress-track",
-                                    children=html.Div(id="progress-fill", className="progress-fill"),
+                                    children=html.Div(
+                                        id="progress-fill",
+                                        className="progress-fill",
+                                        style={"width": "11.111%"},
+                                    ),
                                 ),
                             ],
                         ),
-                        html.Button("Next", id="next-scene", className="nav-button primary", n_clicks=0),
+                        html.Button(
+                            "Next",
+                            id="next-scene",
+                            className="nav-button primary",
+                            n_clicks=0,
+                            disabled=False,
+                        ),
                     ],
                 ),
             ],
@@ -632,23 +658,49 @@ def navigate_scene(
 
 
 @app.callback(
+    Output("ablation-revealed", "data"),
+    Input("reveal-llm-button", "n_clicks", allow_optional=True),
+    State("ablation-revealed", "data"),
+    prevent_initial_call=True,
+)
+def reveal_ablation(
+    reveal_clicks: int | None,
+    already_revealed: bool | None,
+) -> bool:
+    return bool(already_revealed) or bool(reveal_clicks)
+
+
+@app.callback(
+    Output("importance-revealed", "data"),
+    Input("reveal-importance-button", "n_clicks", allow_optional=True),
+    State("importance-revealed", "data"),
+    prevent_initial_call=True,
+)
+def reveal_importance(
+    reveal_clicks: int | None,
+    already_revealed: bool | None,
+) -> bool:
+    return bool(already_revealed) or bool(reveal_clicks)
+
+
+@app.callback(
     Output("scene-content", "children"),
     Output("scene-progress", "children"),
     Output("progress-fill", "style"),
     Output("prev-scene", "disabled"),
     Output("next-scene", "disabled"),
     Input("current-scene", "data"),
-    Input("reveal-llm-button", "n_clicks"),
-    Input("reveal-importance-button", "n_clicks"),
+    Input("ablation-revealed", "data"),
+    Input("importance-revealed", "data"),
 )
 def render_scene(
     current_scene: int | None,
-    reveal_llm_clicks: int | None,
-    reveal_importance_clicks: int | None,
+    ablation_revealed: bool | None,
+    importance_revealed: bool | None,
 ) -> tuple[html.Section, str, dict[str, str], bool, bool]:
     scene = max(0, min(int(current_scene or 0), SCENE_COUNT - 1))
-    show_llm = bool(reveal_llm_clicks)
-    show_importance = bool(reveal_importance_clicks)
+    show_llm = bool(ablation_revealed)
+    show_importance = bool(importance_revealed)
     progress_pct = f"{((scene + 1) / SCENE_COUNT) * 100:.3f}%"
     return (
         build_scene(scene, show_llm=show_llm, show_importance=show_importance),
