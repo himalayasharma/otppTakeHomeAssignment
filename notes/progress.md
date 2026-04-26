@@ -95,7 +95,6 @@ Next: keep the canonical split fixed unless a longer historical news source is a
 ## Day 7 (2026-04-25, 1.0h)
 Done: added manifest-driven transcript backfill/scoring, collected 15 missing FinBERT transcript files without overwriting existing raw files, rebuilt 21-row `finbert_scores.parquet`, and reran price+FinBERT with equal coverage; MAE is 0.016759 vs price-only 0.016618 (`delta_rel=+0.008484`). Branch: `feat/finbert-transcript-coverage`. W&B: `p9dtlvkb`.
 Next: carry the repaired FinBERT ablation into the report as a clean negative result, while keeping news variants blocked unless a longer historical news source is approved. Branch: `feat/finbert-transcript-coverage`.
-
 ## Day 7 (2026-04-25, 0.3h)
 Done: investigated the Claude+news missing-data issue and recorded the active blocker in `.agents/open-questions.md`: the complete NewsAPI/Claude corpus only produces strict-past valid rows in fold 5 test (`train_valid=0`, `test_valid=12`), so `price+news` / `price+all` are not estimable under the canonical split. Branch: `feat/finbert-transcript-coverage`. W&B: N/A.
 Next: report news variants as structurally blocked unless a longer historical news source/backfill is approved. Branch: `feat/finbert-transcript-coverage`.
