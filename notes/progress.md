@@ -95,3 +95,18 @@ Next: keep the canonical split fixed unless a longer historical news source is a
 ## Day 7 (2026-04-25, 1.0h)
 Done: added manifest-driven transcript backfill/scoring, collected 15 missing FinBERT transcript files without overwriting existing raw files, rebuilt 21-row `finbert_scores.parquet`, and reran price+FinBERT with equal coverage; MAE is 0.016759 vs price-only 0.016618 (`delta_rel=+0.008484`). Branch: `feat/finbert-transcript-coverage`. W&B: `p9dtlvkb`.
 Next: carry the repaired FinBERT ablation into the report as a clean negative result, while keeping news variants blocked unless a longer historical news source is approved. Branch: `feat/finbert-transcript-coverage`.
+## Day 7 (2026-04-25, 0.3h)
+Done: investigated the Claude+news missing-data issue and recorded the active blocker in `.agents/open-questions.md`: the complete NewsAPI/Claude corpus only produces strict-past valid rows in fold 5 test (`train_valid=0`, `test_valid=12`), so `price+news` / `price+all` are not estimable under the canonical split. Branch: `feat/finbert-transcript-coverage`. W&B: N/A.
+Next: report news variants as structurally blocked unless a longer historical news source/backfill is approved. Branch: `feat/finbert-transcript-coverage`.
+
+## Day 7 (2026-04-25, 1.4h)
+Done: implemented and tested the FMP NVDA backfill path (`symbols=NVDA`, profile `fmp_nvda_backfill_v1`, immutable raw write), collected `data/raw/news/fmp_nvda_backfill_2025_2026.json` with 14,719 NVDA rows covering `2025-01-01` to `2026-04-10`, and extended the Claude builder to validate/normalize FMP payloads; `uv run pytest -q` passed (92 passed, 1 skipped) and `uv run ruff check .` passed. Branch: `feat/finbert-transcript-coverage`. W&B: N/A.
+Next: decide whether to add a resumable/explicit-cost Claude scoring path or narrow the FMP corpus before scoring; the attempted full sequential scorer was stopped before processed news parquets were overwritten. Branch: `feat/finbert-transcript-coverage`.
+
+## Day 8 (2026-04-26, 0.9h)
+Done: added Gemini `gemini-2.5-flash-lite` as a second news-scoring provider with REST structured JSON output, resumable checkpoint parquet/JSONL, cost/drop guardrails, and atomic final parquet promotion; verified `uv run pytest -q` (99 passed, 1 skipped), `uv run ruff check .`, and the real FMP Gemini command's HTTP 429 quota failure path without touching final processed score parquets. Branch: `feat/finbert-transcript-coverage`. W&B: N/A.
+Next: enable paid/available Gemini quota, run the full FMP scoring command with an explicit cost cap, then rerun `uv run python -m scripts.run_lightgbm --ablation` only after FMP-derived `news_scores.parquet` is complete. Branch: `feat/finbert-transcript-coverage`.
+
+## Day 8 (2026-04-26, 0.6h)
+Done: added W&B cost metric logging and scriptable cost-cap milestone alerts to `scripts.build_news_scores`, including resume-aware threshold handling and cost-cap breach coverage; verified `uv run pytest -q` (107 passed, 1 skipped) and `uv run ruff check .`. Branch: `feat/finbert-transcript-coverage`. W&B: N/A.
+Next: enable paid/available Gemini quota, run the FMP Gemini scoring command with `--wandb-alerts` and an explicit cost cap, then rerun the ablation only after FMP-derived news scores are complete. Branch: `feat/finbert-transcript-coverage`.
