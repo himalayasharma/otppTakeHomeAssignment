@@ -84,9 +84,9 @@ Source: `data/processed/feature_importance.csv` (LightGBM gain, `price+all` mode
 
 ![Feature importance by gain](docs/charts/feature_importance.png)
 
-The top seven features are price-derived. `days_since_last_call` ranks first (gain 1953) — likely a proxy for the proximity-to-earnings volatility cycle. `realized_vol_5d` and lagged vol features rank 2–4, consistent with the HAR literature.
+The top seven non-zero-gain features are price-derived. `ret_lag_1` ranks first (gain 4734), followed by `ret_lag_21`, `vol_lag_21`, `vol_zscore_21`, and `realized_vol_5d`, consistent with the price-only model carrying the result.
 
-The first LLM feature, `finbert_neg_mean`, ranks 8th of 28 (gain 835). `news_sent_mean` ranks 10th (gain 710). The model uses these features in-sample, but their presence does not reduce out-of-sample MAE — a pattern consistent with overfitting on the sparse, 2025-only news data. The remaining 11 news topic columns (gains 126–604) collectively account for less than 20% of total gain.
+The only non-zero LLM features in the tracked `price+all` artifact are `finbert_pos_mean` (gain 219) and `finbert_neg_mean` (gain 60). `days_since_last_call`, all news sentiment/risk/count columns, and all news topic columns have zero gain. The model does not find incremental out-of-sample value from the LLM-derived features under the current walk-forward setup.
 
 ---
 
