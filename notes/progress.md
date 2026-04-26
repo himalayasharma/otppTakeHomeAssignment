@@ -137,4 +137,4 @@ Next: deploy the contents of `demo_app/` to a Hugging Face Docker Space or open 
 
 ## Day 8 (2026-04-26, 0.2h)
 Done: merged `origin/master` into `feat/demo-app`, resolved the report/progress conflicts while preserving the demo-app artifacts, and verified `uv run pytest -q`, `uv run ruff check .`, plus a local Dash HTTP 200 smoke check on port 7861. Branch: `feat/demo-app`. W&B: N/A.
-Next: push the merge commit and confirm PR #29 is no longer marked dirty. Branch: `feat/demo-app`.
+Next: monitor PR #29 checks/review and merge once green. Branch: `feat/demo-app`.
