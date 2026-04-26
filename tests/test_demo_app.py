@@ -67,9 +67,46 @@ def test_layout_contains_expected_sections() -> None:
         for component in _walk_components(demo_app.app.layout)
     }
 
-    assert {"results", "feature-importance", "methodology", "productionization"} <= (
+    assert {"current-scene", "scene-content", "prev-scene", "next-scene"} <= (
         component_ids
     )
+
+
+def test_presentation_deck_builds_all_nine_scenes() -> None:
+    scene_ids = {
+        demo_app.build_scene(scene_index).id
+        for scene_index in range(demo_app.SCENE_COUNT)
+    }
+
+    assert scene_ids == {
+        "scene-thesis",
+        "scene-problem",
+        "scene-data",
+        "scene-leakage",
+        "scene-baseline-ladder",
+        "scene-ablation",
+        "scene-why-llm-lost",
+        "scene-engineering-quality",
+        "scene-close",
+    }
+
+
+def test_render_scene_returns_progress_and_navigation_state() -> None:
+    scene, progress, progress_style, previous_disabled, next_disabled = (
+        demo_app.render_scene(0, 0, 0)
+    )
+
+    assert scene.id == "scene-thesis"
+    assert progress == "1 / 9"
+    assert progress_style["width"] == "11.111%"
+    assert previous_disabled is True
+    assert next_disabled is False
+
+    _, progress, _, previous_disabled, next_disabled = demo_app.render_scene(8, 1, 1)
+
+    assert progress == "9 / 9"
+    assert previous_disabled is False
+    assert next_disabled is True
 
 
 def test_feature_family_classification_handles_expected_groups() -> None:
@@ -90,3 +127,15 @@ def test_demo_figures_are_plotly_figures() -> None:
     assert len(results.data) == 2
     assert results.layout.template is not None
     assert len(feature_importance.data) >= 2
+
+
+def test_feature_importance_reveal_can_hide_llm_families() -> None:
+    importance = demo_app.load_feature_importance()
+
+    figure = demo_app.make_feature_importance_figure(
+        importance,
+        top_n=8,
+        include_llm=False,
+    )
+
+    assert {trace.name for trace in figure.data} == {"price"}
