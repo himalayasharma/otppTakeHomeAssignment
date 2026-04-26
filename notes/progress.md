@@ -138,3 +138,15 @@ Next: deploy the contents of `demo_app/` to a Hugging Face Docker Space or open 
 ## Day 8 (2026-04-26, 0.2h)
 Done: merged `origin/master` into `feat/demo-app`, resolved the report/progress conflicts while preserving the demo-app artifacts, and verified `uv run pytest -q`, `uv run ruff check .`, plus a local Dash HTTP 200 smoke check on port 7861. Branch: `feat/demo-app`. W&B: N/A.
 Next: monitor PR #29 checks/review and merge once green. Branch: `feat/demo-app`.
+
+## Day 8 (2026-04-26, 0.5h)
+Done: converted `demo_app/` from a tabbed dashboard into a 9-scene guided presentation deck with reveal controls, keyboard-arrow navigation, updated projector-friendly styling, and verified `uv run pytest -q`, `uv run ruff check .`, plus a local Dash HTTP 200 smoke check on port 7862. Branch: `feat/demo-app`. W&B: N/A.
+Next: review the presentation flow in browser and monitor PR #30 for the deck-format change. Branch: `feat/demo-app`.
+
+## Day 8 (2026-04-26, 0.3h)
+Done: fixed the blank Dash presentation initial render by server-rendering scene 1, moving reveal state into persistent stores, and covering the default/reveal states with focused tests; verified `uv run pytest -q`, `uv run ruff check .`, and local HTTP 200/layout smoke checks on port 7862. Branch: `feat/demo-app`. W&B: N/A.
+Next: push the green `feat/demo-app` fix to PR #30 and re-check hosted deck behavior. Branch: `feat/demo-app`.
+
+## Day 8 (2026-04-26, 0.2h)
+Done: merged latest `origin/master` into `feat/demo-app`, resolved PR #30 conflicts by preserving the presentation deck over the earlier dashboard files, and verified `uv run pytest -q`, `uv run ruff check .`, plus local HTTP 200/layout smoke checks on port 7862. Branch: `feat/demo-app`. W&B: N/A.
+Next: push the conflict-resolution merge commit and confirm PR #30 is mergeable. Branch: `feat/demo-app`.

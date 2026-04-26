@@ -26,6 +26,16 @@ def _walk_components(component: object) -> list[object]:
     return components
 
 
+def _component_by_id(component: object, component_id: str) -> object:
+    matches = [
+        child
+        for child in _walk_components(component)
+        if getattr(child, "id", None) == component_id
+    ]
+    assert len(matches) == 1
+    return matches[0]
+
+
 def test_demo_artifact_loader_reads_expected_feature_sets_and_metrics() -> None:
     ablation = demo_app.load_ablation_results()
 
@@ -67,9 +77,95 @@ def test_layout_contains_expected_sections() -> None:
         for component in _walk_components(demo_app.app.layout)
     }
 
-    assert {"results", "feature-importance", "methodology", "productionization"} <= (
+    assert {"current-scene", "scene-content", "prev-scene", "next-scene"} <= (
         component_ids
     )
+
+
+def test_initial_layout_renders_first_scene_and_progress() -> None:
+    layout = demo_app.app.layout
+
+    scene_content = _component_by_id(layout, "scene-content")
+    progress = _component_by_id(layout, "scene-progress")
+    progress_fill = _component_by_id(layout, "progress-fill")
+    previous_button = _component_by_id(layout, "prev-scene")
+    next_button = _component_by_id(layout, "next-scene")
+
+    assert scene_content.children.id == "scene-thesis"
+    assert progress.children == "1 / 9"
+    assert progress_fill.style["width"] == "11.111%"
+    assert previous_button.disabled is True
+    assert next_button.disabled is False
+
+
+def test_presentation_deck_builds_all_nine_scenes() -> None:
+    scene_ids = {
+        demo_app.build_scene(scene_index).id
+        for scene_index in range(demo_app.SCENE_COUNT)
+    }
+
+    assert scene_ids == {
+        "scene-thesis",
+        "scene-problem",
+        "scene-data",
+        "scene-leakage",
+        "scene-baseline-ladder",
+        "scene-ablation",
+        "scene-why-llm-lost",
+        "scene-engineering-quality",
+        "scene-close",
+    }
+
+
+def test_render_scene_returns_progress_and_navigation_state() -> None:
+    scene, progress, progress_style, previous_disabled, next_disabled = (
+        demo_app.render_scene(0, False, False)
+    )
+
+    assert scene.id == "scene-thesis"
+    assert progress == "1 / 9"
+    assert progress_style["width"] == "11.111%"
+    assert previous_disabled is True
+    assert next_disabled is False
+
+    _, progress, _, previous_disabled, next_disabled = demo_app.render_scene(
+        8,
+        True,
+        True,
+    )
+
+    assert progress == "9 / 9"
+    assert previous_disabled is False
+    assert next_disabled is True
+
+
+def test_reveal_state_callbacks_are_sticky_booleans() -> None:
+    assert demo_app.reveal_ablation(1, False) is True
+    assert demo_app.reveal_ablation(None, True) is True
+    assert demo_app.reveal_importance(1, False) is True
+    assert demo_app.reveal_importance(None, True) is True
+
+
+def test_ablation_scene_reveal_adds_llm_variant_traces() -> None:
+    hidden_scene = demo_app.build_scene(5, show_llm=False)
+    revealed_scene = demo_app.build_scene(5, show_llm=True)
+
+    hidden_figure = _component_by_id(hidden_scene, "results-chart").figure
+    revealed_figure = _component_by_id(revealed_scene, "results-chart").figure
+
+    assert len(hidden_figure.data) == 1
+    assert len(revealed_figure.data) == 4
+
+
+def test_importance_scene_reveal_adds_llm_feature_families() -> None:
+    hidden_scene = demo_app.build_scene(6, show_importance=False)
+    revealed_scene = demo_app.build_scene(6, show_importance=True)
+
+    hidden_figure = _component_by_id(hidden_scene, "importance-chart").figure
+    revealed_figure = _component_by_id(revealed_scene, "importance-chart").figure
+
+    assert {trace.name for trace in hidden_figure.data} == {"price"}
+    assert {"finbert", "news"} <= {trace.name for trace in revealed_figure.data}
 
 
 def test_feature_family_classification_handles_expected_groups() -> None:
@@ -90,3 +186,15 @@ def test_demo_figures_are_plotly_figures() -> None:
     assert len(results.data) == 2
     assert results.layout.template is not None
     assert len(feature_importance.data) >= 2
+
+
+def test_feature_importance_reveal_can_hide_llm_families() -> None:
+    importance = demo_app.load_feature_importance()
+
+    figure = demo_app.make_feature_importance_figure(
+        importance,
+        top_n=8,
+        include_llm=False,
+    )
+
+    assert {trace.name for trace in figure.data} == {"price"}
